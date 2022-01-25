@@ -4,21 +4,17 @@ import alpaca_backtrader_api as alpaca
 import backtrader as bt
 import pytz
 from datetime import datetime
-from local_settings import alpaca_paper
+from Alpaca_config import *
 
-ALPACA_KEY_ID = alpaca_paper['api_key']
-ALPACA_SECRET_KEY = alpaca_paper['api_secret']
+ALPACA_KEY_ID = API_KEY_PAPER
+ALPACA_SECRET_KEY = API_SECRET_PAPER
 ALPACA_PAPER = True
 
 fromdate = datetime(2020,8,5)
 todate = datetime(2020,8,10)
 
 tickers = ['SPY']
-timeframes = {
-    '15Min':15,
-    '30Min':30,
-    '1H':60,
-}
+timeframes = {'15Min':15,'30Min':30,'1H':60,}
 
 class RSIStack(bt.Strategy):
 

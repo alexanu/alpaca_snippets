@@ -9,25 +9,14 @@ from alpaca_trade_api import StreamConn
 import threading
 import time
 import datetime
-import logging
-import argparse
 
-logging.basicConfig()
-logging.getLogger().setLevel(logging.DEBUG)
-requests_log = logging.getLogger("requests.packages.urllib3")
-requests_log.setLevel(logging.DEBUG)
-requests_log.propagate = True
-
-API_KEY = "ALPACA API KEY HERE"
-API_SECRET = "ALPACA API SECRET HERE"
-APCA_API_BASE_URL = "https://paper-api.alpaca.markets"
+from Alpaca_config import * # contains fmp key as well
 
 class BuyDoji:
   def __init__(self):
-    self.alpaca = tradeapi.REST(API_KEY, API_SECRET, APCA_API_BASE_URL, api_version='v2')
+    self.alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
   def run(self):
-        #On Each Minute
-        async def on_minute(conn, channel, bar):
+        async def on_minute(conn, channel, bar): # every Minute
             symbol = bar.symbol
             print("Close: ", bar.close)
             print("Open: ", bar.open)
@@ -42,8 +31,7 @@ class BuyDoji:
         #Connect to get streaming market data
         conn = StreamConn('Polygon Key Here', 'Polygon Key Here', 'wss://alpaca.socket.polygon.io/stocks')
         on_minute = conn.on(r'AM$')(on_minute)
-        # Subscribe to Microsoft Stock
-        conn.run(['AM.MSFT'])
+        conn.run(['AM.MSFT']) # Subscribe to Microsoft Stock
 
 # Run the BuyDoji class
 ls = BuyDoji()

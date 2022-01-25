@@ -7,9 +7,8 @@ from datetime import timedelta
 from pytz import timezone
 tz = timezone('America/New_York')
 
-api = tradeapi.REST('xxxx',
-                    'xxxxx',
-                    'https://paper-api.alpaca.markets')
+from Alpaca_config import * # contains fmp key as well
+alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
 
 import logging
 logging.basicConfig(filename='./new_5min_ema.log', format='%(name)s - %(levelname)s - %(message)s')

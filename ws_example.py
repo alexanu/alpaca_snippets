@@ -1,11 +1,66 @@
 # https://alpaca.markets/docs/api-documentation/api-v2/market-data/streaming/
 
+import alpaca_trade_api
+
+from alpaca_trade_api.stream import Stream
+from Alpaca_config import *
+
+alpaca_trade_api.__version__
+
+import logging
+log = logging.getLogger(__name__)
+
+
+async def print_trade(t):
+    print('trade', t)
+
+async def print_quote(q):
+    print('quote', q)
+
+async def print_trade_update(tu):
+    print('trade update', tu)
+
+async def print_crypto_trade(t):
+    print('crypto trade', t)
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    feed = 'SIP'
+    stream = Stream(API_KEY_PAPER, API_SECRET_PAPER, data_feed=feed, raw_data=True)
+    stream.subscribe_trade_updates(print_trade_update)
+    stream.subscribe_trades(print_trade, 'AAPL')
+    stream.subscribe_quotes(print_quote, 'IBM')
+    stream.subscribe_crypto_trades(print_crypto_trade, 'BTCUSD')
+
+    @stream.on_bar('MSFT')
+    async def _(bar):
+        print('bar', bar)
+
+    @stream.on_status("*")
+    async def _(status):
+        print('status', status)
+
+    @stream.on_luld('AAPL', 'MSFT')
+    async def _(luld):
+        print('LULD', luld)
+
+    stream.run()
+
+if __name__ == "__main__":
+    main()
+
+
+
+# ----------------------------------------------------------------------------------------------------
+
+
+
+
 
 import alpaca_trade_api as tradeapi
 import threading
 import time
 
-from Alpaca_config import *
 
 
 # instantiate REST API
@@ -144,7 +199,6 @@ class Data_Stream():
 async def trade_callback(t):
     print('trade', t)
 
-
 async def quote_callback(q):
     print('quote', q)
 
@@ -153,7 +207,7 @@ async def quote_callback(q):
 stream = Stream(<ALPACA_API_KEY>,
                 <ALPACA_SECRET_KEY>,
                 base_url=URL('https://paper-api.alpaca.markets'),
-                data_feed='iex')  # <- replace to SIP if you have PRO subscription
+                data_feed='SIP')  # <- replace to SIP if you have PRO subscription
 
 # subscribing to event
 stream.subscribe_trades(trade_callback, 'AAPL')
@@ -205,73 +259,23 @@ class Data_Stream():
     def get_stream_data(self):
         return list_of_price_queues
 
-#--------------------------------------------------------------------------------------------------------
 
-import logging
+##--------------------------------------------------------------------------------------------------------
+# From Udemy: not using Alpaca SDK, but directly via websocket
 
-from alpaca_trade_api.stream import Stream
-
-log = logging.getLogger(__name__)
-
-
-async def print_trade(t):
-    print('trade', t)
-
-
-async def print_quote(q):
-    print('quote', q)
-
-
-async def print_trade_update(tu):
-    print('trade update', tu)
-
-
-def main():
-    logging.basicConfig(level=logging.INFO)
-    feed = 'iex'  # <- replace to SIP if you have PRO subscription
-    stream = Stream(data_feed=feed, raw_data=True)
-    stream.subscribe_trade_updates(print_trade_update)
-    stream.subscribe_trades(print_trade, 'AAPL')
-    stream.subscribe_quotes(print_quote, 'IBM')
-
-    @stream.on_bar('MSFT')
-    async def _(bar):
-        print('bar', bar)
-
-    @stream.on_status("*")
-    async def _(status):
-        print('status', status)
-
-    @stream.on_luld('AAPL', 'MSFT')
-    async def _(luld):
-        print('LULD', luld)
-
-    stream.run()
-
-
-if __name__ == "__main__":
-    main()
-
-
-##-----------------------------------------------------------
-
-
-import config
+import Alpaca_config
 import websocket, json
 
 def on_open(ws):
     print("opened")
     auth_data = {
         "action": "authenticate",
-        "data": {"key_id": config.API_KEY, "secret_key": config.SECRET_KEY}
+        "data": {"key_id": API_KEY_PAPER, "secret_key": API_SECRET_PAPER}
     }
 
     ws.send(json.dumps(auth_data))
-
     listen_message = {"action": "listen", "data": {"streams": ["AM.TSLA"]}}
-
     ws.send(json.dumps(listen_message))
-
 
 def on_message(ws, message):
     print("received a message")
@@ -283,4 +287,73 @@ def on_close(ws):
 socket = "wss://data.alpaca.markets/stream"
 
 ws = websocket.WebSocketApp(socket, on_open=on_open, on_message=on_message, on_close=on_close)
+ws.run_forever()
+
+# -------------------------------------------------------------------------------------------------
+
+import alpaca_trade_api as tradeapi
+conn = tradeapi.stream2.StreamConn()
+@conn.on(r'^trade_updates$')
+async def on_trade_updates(conn, channel, trade):
+    order = trade.order
+
+    broker = Broker.get_instance()
+    symbol = order['symbol']
+
+    if trade.event == 'fill':
+        if order["side"] == 'buy':
+            broker.set_filled(symbol)
+        if order['side'] == 'sell':
+            # Update our positions
+            broker.set_unfilled(symbol)
+
+    elif trade.event == 'canceled':
+        broker.cancel_order(symbol)
+
+#-----------------------------------------------------------------
+stream.subscribe_bars(barReceived, "AAPL", "MSFT", "TSLA")
+
+listOfSymbols = ["AAPL", "MSFT", "TSLA"]
+stream.subscribe_bars(barReceived, *listOfSymbols)
+
+# if your tickers are stored in a list called tickers, you can "splat" that list by calling like this
+# if you call it without the * in front of tickers, then python will understand that as being one argument that is a list rather than multiple arguments that get collected into a tuple
+self.stream.subscribe_quotes(default_quote, *tickers)
+
+
+# --------------------------------------------------------------
+# Stream with websocket without SDK (from Udemy)
+
+import websocket
+import json
+
+endpoint_stream = "wss://stream.data.alpaca.markets/v2/sip" # I have a paid subscription
+headers = json.loads(open("Alpaca_config.txt",'r').read())
+
+trades_stream = ["AAPL"]
+quotes_stream = ["AMD","CLDR"]
+bars_stream = ["AAPL","VOO"]
+
+def on_open(ws):
+    auth = {
+            "action": "auth",
+            "key": headers["APCA-API-KEY-ID"],
+            "secret": headers["APCA-API-SECRET-KEY"]
+           }
+    
+    ws.send(json.dumps(auth)) # json.dumps convert json to string
+    
+    message = {
+                "action": "subscribe",
+                "trades": trades_stream,
+                "quotes": quotes_stream,
+                "bars": bars_stream
+              }
+                
+    ws.send(json.dumps(message))
+ 
+def on_message(ws, message):
+    print(message)
+
+ws = websocket.WebSocketApp(endpoint_stream, on_open=on_open, on_message=on_message)
 ws.run_forever()

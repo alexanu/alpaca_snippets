@@ -1,0 +1,3 @@
+[console_scripts]
+tcal = trading_calendars.tcal:main
+

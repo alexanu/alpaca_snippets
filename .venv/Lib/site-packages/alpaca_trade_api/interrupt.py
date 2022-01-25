@@ -1,0 +1,9 @@
+import time
+
+if __name__ == '__main__':
+    while 1:
+        try:
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("interuppted")
+            exit(0)

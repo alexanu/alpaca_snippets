@@ -4,40 +4,29 @@
 
 
 import os
+import datetime as dt
 import alpaca_trade_api as tradeapi
+from alpaca_trade_api.rest import TimeFrame
 import pandas as pd
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from utils import *
+from Alpaca_config import *
+alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
+mail_subject = 'Testing Followed Stocks 5-min'
 
 
 def pairs_trading_algo(self):
     
-    #Specify paper trading environment 
-    os.environ["APCA_API_BASE_URL"] = "https://paper-api.alpaca.markets"
-    #Insert API Credentials 
-    api = tradeapi.REST('xxx', 'xxx', api_version='v2') # or use ENV Vars shown below
-    account = api.get_account()
+    account = alpaca.get_account()
     
-    #The mail addresses and password
-    sender_address = 'xxx@gmail.com'
-    sender_pass = 'xxxx'
-    receiver_address = 'xx@gmail.com'
-    #Setup the MIME
-    message = MIMEMultipart()
-    message['From'] = 'Alpaca Paper'
-    message['To'] = receiver_address
-    message['Subject'] = 'Pairs Trading Algo'   #The subject line
-    
-    #Selection of stocks
-    days = 1000
+    days = 1000 # working days
+    today = dt.datetime.now().strftime("%Y-%m-%d")
+    n_days_ago = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
+
     stock1 = 'ADBE'
     stock2 = 'AAPL'
-    #Put Hisrorical Data into variables
-    stock1_barset = api.get_barset(stock1,'day',limit=days)
-    stock2_barset = api.get_barset(stock2,'day',limit=days)
-    stock1_bars = stock1_barset[stock1]
-    stock2_bars = stock2_barset[stock2]
+    stock1_barset = alpaca.get_bars(stock1, TimeFrame.Day,n_days_ago,today,adjustment='raw').df
+    stock2_barset = alpaca.get_bars(stock2, TimeFrame.Day,n_days_ago,today,adjustment='raw').df
+    historical = stock1_barset['close'].join(stock2_barset['close'], how='outer')
     #Grab stock1 data and put in to a array
     data_1 = []
     times_1 = []
@@ -122,15 +111,7 @@ def pairs_trading_algo(self):
     else:
         mail_content = "The Market is Closed"
         
-    #The body and the attachments for the mail
-    message.attach(MIMEText(mail_content, 'plain'))
-    #Create SMTP session for sending the mail
-    session = smtplib.SMTP('smtp.gmail.com', 587) #use gmail with port
-    session.starttls() #enable security
-    session.login(sender_address, sender_pass) #login with mail_id and password
-    text = message.as_string()
-    session.sendmail(sender_address, receiver_address, text)
-    session.quit()
+    sent_alpaca_email(mail_subject, mail_content)
     
     done = 'Mail Sent'
 

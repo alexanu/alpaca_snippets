@@ -4,7 +4,6 @@
 '''
 trades every day refreshing portfolio based on the EMA ranking
 low (price - EMA) vs price ratio indicates there is a big dip in a short time
-
 '''
 
 
@@ -19,7 +18,7 @@ from Alpaca_config import * # contains fmp key as well
 alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
 
 Universe = pd.json_normalize(fmpsdk.sp500_constituent(apikey=fmp_key)).symbol.to_list()
-
+Universe = Universe[1:10]
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -32,15 +31,19 @@ def _dry_run_submit(*args, **kwargs):
 # api.submit_order =_dry_run_submit
 
 
-def _get_prices(symbols, end_dt, max_workers=5):
-    '''Get the map of DataFrame price data from Alpaca's data API.'''
+def prices(symbols):
+    '''Get the map of prices in DataFrame with the symbol name key.'''
+    now = pd.Timestamp.now(tz=NY)
+    end_dt = now
+    if now.time() >= pd.Timestamp('09:30', tz=NY).time():
+        end_dt = now - pd.Timedelta(now.strftime('%H:%M:%S')) - pd.Timedelta('1 minute')
 
     start_dt = end_dt - pd.Timedelta('50 days')
     start = start_dt.strftime('%Y-%m-%d')
     end = end_dt.strftime('%Y-%m-%d')
 
-    def get_barset(symbols):
-        return api.get_barset(symbols,'day',limit = 50,start=start,end=end)
+    def get_barset(symbol):
+        return alpaca.get_bars(symbol, TimeFrame.Day, start, end, limit=50, adjustment='raw').df
 
     # The maximum number of symbols we can request at once is 200.
     barset = None
@@ -54,14 +57,6 @@ def _get_prices(symbols, end_dt, max_workers=5):
 
     return barset.df
 
-
-def prices(symbols):
-    '''Get the map of prices in DataFrame with the symbol name key.'''
-    now = pd.Timestamp.now(tz=NY)
-    end_dt = now
-    if now.time() >= pd.Timestamp('09:30', tz=NY).time():
-        end_dt = now - pd.Timedelta(now.strftime('%H:%M:%S')) - pd.Timedelta('1 minute')
-    return _get_prices(symbols, end_dt)
 
 
 def calc_scores(price_df, dayindex=-1):
@@ -172,18 +167,12 @@ def main():
     done = None
     logging.info('start running')
     while True:
-        # clock API returns the server time including
-        # the boolean flag for market open
-        clock = api.get_clock()
+        clock = alpaca.get_clock()
         now = clock.timestamp
         if clock.is_open and done != now.strftime('%Y-%m-%d'):
             price_df = prices(Universe)
-            orders = get_orders(api, price_df)
+            orders = get_orders(alpaca, price_df)
             trade(orders)
-
-            # flag it as done so it doesn't work again for the day
-            # TODO: this isn't tolerant to process restarts, so this
-            # flag should probably be saved on disk
             done = now.strftime('%Y-%m-%d')
             logger.info(f'done for {done}')
 

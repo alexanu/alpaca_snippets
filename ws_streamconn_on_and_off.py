@@ -59,6 +59,8 @@ if __name__ == '__main__':
     while 1:
         try:
             threading.Thread(target=consumer_thread).start()
+                                # conn.run() method is blocking, meaning we cannot execute anything after that 
+                                # So in order to communicate with our conn object we need to use another thread
             time.sleep(20)
             loop.run_until_complete(conn.stop_ws())
             time.sleep(20)

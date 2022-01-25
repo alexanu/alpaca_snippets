@@ -95,7 +95,8 @@ while True:
 
     try:
         # deriving range of last 10min
-        candlesticks = api.get_barset('AAPL', 'minute', limit=10)
+        candlesticks = alpaca.get_bars('AAPL', TimeFrame.Day, limit=10, adjustment='raw').df
+
         high = candlesticks['AAPL'][0].h
         low = candlesticks['AAPL'][0].l
         range_size = high - low
