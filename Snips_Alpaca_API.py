@@ -947,3 +947,21 @@ import time
         bar_data['intra_day_gain'] = np.log(bar_data.close/bar_data.open)
         bar_data['volatility'] = bar_data.rolling(PREV_STD_DAYS).intra_day_gain.std()
         volatility = bar_data.volatility[-1]
+
+
+# Experiment 1
+
+    all_hist_capital = pd.read_csv('D:\\Data\\Other_data\\hist_capitalisation_index_constit.csv',parse_dates=['date'])
+    all_hist_capital = all_hist_capital.loc[all_hist_capital['rank'] < 51] # keep only top50 on every date
+
+    # delete symbols which appeared by mistake
+    unique_symb= all_hist_capital['symbol'].value_counts() # counts how many times each symbol appears
+    check_symb = all_hist_capital[all_hist_capital['symbol'].isin(unique_symb[unique_symb < 10].index)] # select rows, where symbol appears <10 times
+    check_symb = check_symb[check_symb['rank'] < 48] # if it is on the border than it's ok that it appear too few times
+    all_hist_capital = all_hist_capital[~all_hist_capital['symbol'].isin(set(check_symb.symbol))] # these symbols we shouldexclude from df as they probably appeared among top50 by mistake
+
+    # extract
+    test_capital = all_hist_capital.loc[all_hist_capital['rank'] < 5]
+    test_capital = test_capital.loc[test_capital['date'] > "2019"]
+    test_capital['date'].min().strftime("%Y-%m-%d") # check the earliest date
+    test_capital.to_csv('test_capital.csv')

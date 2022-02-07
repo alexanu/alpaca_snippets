@@ -1,3 +1,12 @@
 Alpaca_config.txt
 Alpaca_config.py
 *.docx
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
