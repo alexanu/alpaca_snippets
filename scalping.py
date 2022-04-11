@@ -1,5 +1,6 @@
 
 # Source: https://github.com/alpacahq/example-scalping
+# Description: https://alpaca.markets/learn/concurrent-scalping-algo-async-python/
 # Scalping: in position for very short time => Pattern Day Trader rule => >25k on account
                                             # https://forum.alpaca.markets/t/general-trading/2339
 

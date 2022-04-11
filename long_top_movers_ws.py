@@ -39,14 +39,14 @@ def on_open(ws):
     ws.send(json.dumps(auth)) # json.dumps convert json to string
     message = {
                 "action": "subscribe",
-                "quotes": tickers,
+                "quotes": tickers, # maybe not quotes, but trades
               }               
     ws.send(json.dumps(message))
 
 def on_message(ws, message):
     #print(message)
     tick = json.loads(message)
-    tkr = tick["stream"].split(".")[-1]
+    tkr = tick["stream"].split(".")[-1] # tick[0]["S"]
     ltp[tkr] = float(tick["data"]["p"]) # last traded price
     perc_change[tkr] = round((ltp[tkr]/prev_close[tkr] - 1)*100,2)   
 

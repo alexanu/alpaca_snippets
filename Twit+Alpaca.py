@@ -62,8 +62,6 @@ def request_response(request):
 
 def parse_tweet(tweet):
     
-
-
     alpaca = tradeapi.REST(
         os.getenv("ACCESS_KEY_ID"),
         os.getenv("SECRET_ACCESS_KEY"),
@@ -252,11 +250,7 @@ def sellStaleOrders(alpaca):
 
 def addTrailingStops(alpaca):
     # Go through all orders up until yesterday
-    closed_orders = alpaca.list_orders(
-        status='closed',
-        until=date.today()
-    )
-
+    closed_orders = alpaca.list_orders(status='closed',until=date.today())
     open_orders = alpaca.list_orders(status='open',until=date.today())
     
     open_sell_symbols = {order.symbol for order in open_orders if order.side == "sell" and order.filled_at == None}
@@ -265,19 +259,11 @@ def addTrailingStops(alpaca):
     for order in closed_orders:
         # We only care about stocks we hold, or stocks that don't already have sell orders
         if order.symbol not in positions or order.symbol in open_sell_symbols:
-            continue
-        
+            continue        
         quantity = order.filled_qty
         try:
             # Set a trailing stop for it
-            alpaca.submit_order(
-                symbol=order.symbol,
-                qty=quantity,
-                side='sell',
-                type='trailing_stop',
-                trail_percent=10,  # stop price will be hwm*0.90
-                time_in_force='gtc',
-            )
+            alpaca.submit_order(symbol=order.symbol,qty=quantity,side='sell',type='trailing_stop',trail_percent=10, time_in_force='gtc')
             print(f"Placed a trailing stop order for {order.symbol}")
         except Exception as e:
             print(f"Unable to place sell order for {order.symbol}")

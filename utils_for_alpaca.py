@@ -61,7 +61,7 @@ def get_market_snapshot(api):
     snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
     return snapshot_df
 
-def get_trades(api):
+def get_all_trades(api):
     count = 0
     search = True
     while search:
@@ -84,32 +84,6 @@ def get_trades(api):
     trades = trades.sort_index(ascending=False).reset_index(drop=True)
     trades['transaction_time'] = pd.to_datetime(trades['transaction_time'], format="%Y-%m-%d")
     return(trades)
-
-def get_current_positions(api):
-    positions = api.list_positions()
-    side = {'long':1, 'short':-1}
-
-    ticker = []
-    current_price = []
-    cost_basis = []
-    shares = []
-    today_change = []
-    total_change = []
-
-    for position in positions:
-        ticker.append(position.symbol)
-        current_price.append(float(position.current_price))
-        cost_basis.append(float(position.cost_basis))
-        shares.append(float(position.qty) * side[position.side])
-        today_change.append(float(position.unrealized_intraday_pl))
-        total_change.append(float(position.unrealized_plpc))
-
-    portfolio = pd.DataFrame({
-        'Ticker':ticker, 'Current Price':current_price,'Cost Basis':cost_basis,
-        'Shares':shares,'Change Today ($)':today_change,'Total Return (%)':total_change
-    })
-    
-    return(portfolio)
 
 # Calculates overnight gain (last close to current price)
 def overnight_gain(api,stk):

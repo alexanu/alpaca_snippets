@@ -13,8 +13,6 @@ import time
 
 from .Universes import Universe_SP100
 
-
-
 logger = logging.getLogger(__name__)
 api = tradeapi.REST()
 

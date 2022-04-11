@@ -14,8 +14,6 @@ stocks_to_hold = 150 # Max 200
 max_stock_price = 26
 min_stock_price = 6
 
-# API datetimes will match this format. (-04:00 represents the market's TZ.)
-api_time_format = '%Y-%m-%dT%H:%M:%S.%f-04:00'
 
 # Rate stocks based on the volume's deviation from the previous 5 days and momentum. 
 def get_ratings(api, algo_time):
@@ -87,69 +85,7 @@ def get_shares_to_buy(ratings_df, portfolio):
 
 # Returns a string version of a timestamp compatible with the Alpaca API.
 def api_format(dt):
-    return dt.strftime(api_time_format)
-
-def backtest(api, days_to_test, portfolio_amount):
-    # This is the collection of stocks that will be used for backtesting.
-    assets = api.list_assets()
-    now = datetime.now(timezone('EST'))
-    beginning = now - timedelta(days=days_to_test)
-
-    # skip over market holidays and early market closures during our backtesting window.
-    calendars = api.get_calendar(start=beginning.strftime("%Y-%m-%d"),end=now.strftime("%Y-%m-%d"))
-    shares = {}
-    cal_index = 0
-    for calendar in calendars:
-        # See how much we got back by holding the last day's picks overnight
-        portfolio_amount += get_value_of_assets(api, shares, calendar.date)
-        print('Portfolio value on {}: ${:0.2f}'.format(calendar.date.strftime(
-            '%Y-%m-%d'), portfolio_amount)
-        )
-
-        if cal_index == len(calendars) - 1: # We've reached the end of the backtesting window
-            break
-
-        # Get the ratings for a particular day
-        ratings = get_ratings(api, timezone('EST').localize(calendar.date))
-        shares = get_shares_to_buy(ratings, portfolio_amount)
-        for _, row in ratings.iterrows():
-            # "Buy" our shares on that day and subtract the cost.
-            shares_to_buy = shares[row['symbol']]
-            cost = row['price'] * shares_to_buy
-            portfolio_amount -= cost
-        cal_index += 1
-
-    # Print market (S&P500) return for the time period
-    sp500_bars = api.get_bars('SPY',
-                              TimeFrame.Day,
-                              api_format(calendars[0].date),
-                              api_format(calendars[-1].date),
-                              adjustment='raw')
-    sp500_change = (sp500_bars[-1].c - sp500_bars[0].c) / sp500_bars[0].c
-    print('S&P 500 change during backtesting window: {:.4f}%'.format(
-        sp500_change*100)
-    )
-
-    return portfolio_amount
-
-
-# Used while backtesting to find out how much our portfolio would have been
-# worth the day after we bought it.
-def get_value_of_assets(api, shares_bought, on_date):
-    if len(shares_bought.keys()) == 0:
-        return 0
-
-    total_value = 0
-    formatted_date = api_format(on_date)
-
-    barset = {}
-    for symbol in shares_bought.keys():
-        bars = api.get_bars(symbol,TimeFrame.Day,on_date.date(),on_date.date(),limit=1,adjustment='raw')
-        barset[symbol] = bars
-
-    for symbol in shares_bought:
-        total_value += shares_bought[symbol] * barset[symbol][0].o
-    return total_value
+    return dt.strftime('%Y-%m-%dT%H:%M:%S.%f-04:00')
 
 
 def run_live(api):
@@ -209,21 +145,6 @@ def run_live(api):
         cycle+=1
 
 
-
 if __name__ == '__main__':
     api = tradeapi.REST()
-
-    if len(sys.argv) < 2:
-        print('Error: please specify a command; either "run" or "backtest <cash balance> <number of days to test>".')
-    else:
-        if sys.argv[1] == 'backtest':
-            # Run a backtesting session using the provided parameters
-            start_value = float(sys.argv[2])
-            testing_days = int(sys.argv[3])
-            portfolio_value = backtest(api, testing_days, start_value)
-            portfolio_change = (portfolio_value - start_value) / start_value
-            print('Portfolio change: {:.4f}%'.format(portfolio_change*100))
-        elif sys.argv[1] == 'run':
-            run_live(api)
-        else:
-            print('Error: Unrecognized command ' + sys.argv[1])
+    run_live(api)
