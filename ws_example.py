@@ -271,9 +271,13 @@ self.stream.subscribe_quotes(default_quote, *tickers)
 
 
 # --------------------------------------------------------------
+
+# No SDK videos from PartTimeLarry:
+    # Basic: https://www.youtube.com/watch?v=fIzm57idu3Y
+
 # No SDK stream data (from Udemy)
 
-    import Alpaca_config
+    from Alpaca_config import *
     import websocket, json
 
     endpoint_stream = "wss://stream.data.alpaca.markets/v2/sip" # I have a paid subscription
@@ -286,8 +290,8 @@ self.stream.subscribe_quotes(default_quote, *tickers)
     def on_open(ws):
         auth = {
                 "action": "auth",
-                "key": headers["APCA-API-KEY-ID"],
-                "secret": headers["APCA-API-SECRET-KEY"]
+                "key": API_KEY_PAPER,
+                "secret": API_SECRET_PAPER
             }
         
         ws.send(json.dumps(auth)) # json.dumps convert json to string

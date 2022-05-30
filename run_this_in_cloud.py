@@ -8,8 +8,9 @@ import datetime as dt
 import alpaca_trade_api as tradeapi
 from alpaca_trade_api.rest import TimeFrame
 import pandas as pd
-from utils import *
+from utils_for_alpaca import *
 from Alpaca_config import *
+
 alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
 mail_subject = 'Testing Followed Stocks 5-min'
 

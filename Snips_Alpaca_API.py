@@ -23,6 +23,8 @@ import datetime as dt
     from alpaca_trade_api.rest import TimeFrame
 
 
+
+    import Universes
     from Alpaca_config import *
     alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
     alpaca = tradeapi.REST(API_KEY_REAL, API_SECRET_REAL, API_BASE_URL_REAL, 'v2')
@@ -60,6 +62,7 @@ import datetime as dt
         # https://alpaca.markets/docs/trading-on-alpaca/orders/
 
         # Submit orders
+            # Nice overview of different order types: https://alpaca.markets/learn/13-order-types-you-should-know-about/
             # From Feb 2022 Alpaca allows trading from 4am till 8pm ET (10am - 2am Munich Time)
                 import math
                 limit_price = str(math.ceil(float(alpaca.get_latest_trade("SPY").p))) # round up is done with math.ceil()
@@ -203,6 +206,13 @@ import datetime as dt
                     except Exception as e:
                         print(f"Unable to place sell order for {order.symbol}")
                         print(e)
+
+
+            ticker = random.choice(Universes.Spiders)
+            current_asset_price = math.ceil(float(alpaca.get_latest_trade(ticker).p)) # round up is done with math.ceil()
+            qty = int(float(account.buying_power)/100 / current_asset_price)
+            alpaca.submit_order(symbol=ticker, qty=qty, side="buy", type="limit", limit_price=str(current_asset_price), time_in_force='day', extended_hours=True) # from 4am till 8pm ET (10am - 2am Munich Time)
+            print("Bought {} of {}. Buing power left is {}".format(qty, ticker, float(account.buying_power)))
 
 
 
@@ -686,23 +696,16 @@ import datetime as dt
             data_dump = hist_data_v2(symbols, start="2021-05-15", timeframe="1Min")  
 
 
-        alpaca.get_bars("AAPL", TimeFrame.Day, "2021-08-01", "2021-08-30", limit=10, adjustment='raw').df # 'dividend', 'split', 'all'
+        end_date = pd.Timestamp('now').date().isoformat()
+        end_dt = alpaca.get_clock().timestamp.date().isoformat()
+        n_days_ago = (dt.datetime.now() - dt.timedelta(days=2)).strftime("%Y-%m-%d")
 
-        start_time = pd.to_datetime('2021-12-20', utc=True)
-        end_time = pd.to_datetime('2021-12-22', utc=True)
-        symbols = ['TGT', 'IBM', 'AAPL']
-        raw_bars = alpaca.get_bars(symbols, '1Day', start=start_time.isoformat(), end=end_time.isoformat(), adjustment='raw').df
-        raw_bars.index = raw_bars.index.tz_convert('America/New_York') # Convert to market time for easier reading
+        AAPL = alpaca.get_bars("AAPL", TimeFrame.Minute, "2015-12-01", end_dt, limit=300, adjustment='all').df # 'dividend', 'split', 'all'
+                                        # TimeFrame.Day, '1Day'
 
-    
-        bars = alpaca.get_bars('AAPL', TimeFrame.Minute, pd.Timestamp('now').date(), pd.Timestamp('now').date(), limit=300,adjustment='raw')
+        raw_bars = alpaca.get_bars(Universes.TOP10_US_SECTOR, TimeFrame.Minute, end_date, end_date, adjustment='all').df
+        raw_bars.index = raw_bars.index.tz_convert('America/New_York').tz_localize(None) # Convert to market time for easier reading
 
-        now = pd.Timestamp.now(tz='America/New_York').floor('1min')
-        market_open = now.replace(hour=9, minute=30)
-        today = now.strftime('%Y-%m-%d')
-        tomorrow = (now + pd.Timedelta('1day')).strftime('%Y-%m-%d')
-        data = alpaca.get_bars(symbol, TimeFrame.Minute, today, tomorrow, adjustment='raw').df
-        bars = data[market_open:]
 
         # special length bars (e.g. 5Min or 20 Min)
             from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit # this is need to setup special length bars (e.g. 5Min or 20 Min)
@@ -721,46 +724,32 @@ import datetime as dt
                 temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
                 historicalData[symbol]=temp
 
-        # 5 Year hourly data
-            today = date.today()
-            historical_final = pd.DataFrame()
-            for i in range(5):        
-                startyear = 5-i
-                endyear = startyear - 1        
-                startdate = datetime.datetime(today.year-startyear,today.month,today.day).strftime("%Y-%m-%d")
-                enddate = datetime.datetime(today.year-endyear,today.month,today.day).strftime("%Y-%m-%d")
-                historical = alpaca.get_bars(symbol, TimeFrame.Hour, startdate, enddate, limit=10000, adjustment='raw').df
-                historical = historical.reset_index()
-                historical_final = pd.concat([historical_final,historical])    
-            historical_final = historical_final.drop_duplicates()
-            historical_final = historical_final.reset_index(drop=True)
 
+        # get minute data from 2015:
 
-        # Hist data for many symbols in the loop
-            start_dt = end_dt - pd.Timedelta('50 days')
-            barset = {}
-            idx = 0
-            while idx <= len(symbols) - 1:
-                for symbol in symbols[idx:idx+200]: # The maximum number of symbols we can request at once is 200
-                    bars = alpaca.get_bars(symbol, TimeFrame.Day, start_dt.isoformat(), end_dt.isoformat(), limit=50, adjustment='raw')
-                    barset[symbol] = bars
-                idx += 200
-            barset.df
+            import Universes
+            # column_names = ['symbol','start','end','num_rows','completed']
+            # data_summary_df = pd.DataFrame(columns = column_names)
+            data_summary_df = pd.read_excel('Alpaca_minute_quotes_overview.xlsx',index_col=0) # checking current status
+            need_symbols = Universes.hist_index_member
+            need_symbols = Universes.TOP10_US_SECTOR
+            done_symbols=data_summary_df.symbol.to_list() # already downloaded symbols
+            still_missing = list(set(need_symbols) - set(done_symbols))
+            Alpaca_directory = 'D:\\Data\\minute_data\\US\\alpaca_ET_adj\\'
+            for idx, symbol in enumerate(still_missing):
+                try:
+                    temp = alpaca.get_bars(symbol, TimeFrame.Minute, "2015-12-01", "2022-05-20", adjustment='all').df
+                    temp.index = temp.index.tz_convert('America/New_York') # Convert to market time for easier reading
+                    temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
+                    nameoffile=Alpaca_directory+symbol+"_ET_adj_alpaca.csv"
+                    temp.to_csv(nameoffile)
+                    data_summary_df.loc[len(done_symbols)+idx+1] = [symbol, temp.index[0], temp.index[-1],len(temp)]
+                except:
+                    print('Failure with {}'.format(symbol))
+                    data_summary_df.loc[len(done_symbols)+idx+1] = [symbol, "no", "no",0]
+                    pass
+            data_summary_df.to_excel('Alpaca_minute_quotes_overview.xlsx')
 
-
-        # get data for last X days
-            days_of_interest = 10
-            current_day = alpaca.get_clock().timestamp.date().isoformat()
-            trading_days = alpaca.get_calendar()
-            trading_days_df = pd.DataFrame([day._raw for day in trading_days])
-            my_dates = trading_days_df.query('date < @current_day').tail(days_of_interest)
-            symbol = 'SPY'
-            bars = alpaca.get_bars(symbol, '1Minute',
-                                        start=my_dates.head(1).date,
-                                        end=my_dates.tail(1).date, 
-                                        adjustment='all').df
-            market_hours_data = bars.between_time('9:30', '16:00')
-            after_hours_data =  bars.between_time('16:00', '9:30')
 
 
         # async modules for get_bars
@@ -771,7 +760,7 @@ import datetime as dt
             #           It would be less stressfull to request 1000 symbols directly, instead of asking one by one. 
 
 
-        # Ranks all stocks by percent change over the past 10 minutes (higher is better).
+        # Threads: ranks all stocks by percent change over the past 10 minutes (higher is better).
             import threading
             stockUniverse = ['DOMO', 'TLRY', 'SQ', 'MRO', 'AAPL', 'GM', 'SNAP', 'SHOP']
             period_length = 10
@@ -801,13 +790,15 @@ import datetime as dt
             alpaca.get_latest_quote("AAPL")
             alpaca.get_latest_trade("AAPL")
 
+            current_asset_price = math.ceil(float(alpaca.get_latest_trade(ticker).p)) # round up is done with math.ceil()
+
+
             bars = alpaca.get_latest_bars(symbols)
             trades = alpaca.get_latest_trades(symbols)
             quotes = alpaca.get_latest_quotes(symbols)
 
 
             alpaca.get_quotes("AAPL", "2021-02-08", "2021-02-08", limit=10).df
-
 
         # Overnight & intraday gain
             import math
@@ -849,25 +840,19 @@ import datetime as dt
 
     current_day = alpaca.get_clock().timestamp.date().isoformat()
 
+    dt.datetime.now().strftime("%Y-%m-%d")
+    end_dt = alpaca.get_clock().timestamp.date()
+
     days = 1000
     today = dt.datetime.now().strftime("%Y-%m-%d")
     n_days_ago = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
     stock1_barset = alpaca.get_bars(stock1, TimeFrame.Day,n_days_ago,today,adjustment='raw').df
 
-
-    btc_data = alpaca.get_crypto_bars('BTCUSD', TimeFrame.Day, "2021-02-08", "2021-10-18").df
-    btc_data.index = btc_data.index.map(lambda timestamp : timestamp.date) # keep only the date part of our timestamp index
-
-
     alpaca.get_calendar("2021-02-08", "2021-02-18") # start=None, end=None
 
     now = pd.Timestamp.now(tz='America/New_York').floor('1min')
-    market_open = now.replace(hour=9, minute=30)
     today = now.strftime('%Y-%m-%d')
     tomorrow = (now + pd.Timedelta('1day')).strftime('%Y-%m-%d')
-    data = alpaca.get_bars(symbol, TimeFrame.Minute, today, tomorrow, adjustment='raw').df
-    bars = data[market_open:]
-
 
     today = alpaca.get_clock().timestamp.date()
     previous_day = today - pd.Timedelta('1D')
@@ -881,110 +866,27 @@ import datetime as dt
 
 
 
-    # Check market status
-        def check_market():
-            print('\n')
-            clock = alpaca.get_clock()
-            print('The market is {}'.format('open.' if clock.is_open else 'closed.'))    
-            print('\n')
-
-        def _check_market_open(self):
-            clock = alpaca.get_clock()
-            if clock.is_open:
-                pass
-            else:
-                time_to_open = clock.next_open - clock.timestamp
-                print(f"Market is closed now going to sleep for ~{time_to_open.total_seconds()//3600} hours till {clock.next_open.ctime()}")
-                time.sleep(time_to_open.total_seconds())
-
-        def run(self):
-            self._check_market_open()
-            ...
-
-    # Timezones can be a challenge. 
-    # I hope I can help one person so they don't have to suffer through strange behavior only to find out ...
-    # ... your timezone is -4:56 instead of -5:00. 
-        nyse = mcal.get_calendar('NYSE')
-        holidays = nyse.holidays()
-        holidays = list(holidays.holidays) # NYSE Holidays
-        ny_tz = nyse.tz        
-        end_datetime = datetime.now(nyse.tz)
-        start_date = np.busday_offset(dates=end_datetime.date(), offsets=-2, roll='backward', holidays = holidays).item()
-        start_datetime = ny_tz.localize(datetime(start_date.year, start_date.month, start_date.day, end_datetime.hour, end_datetime.minute, 0, 294757))
-        start_time = pd.to_datetime(start_datetime, utc=True)
-        end_time = pd.to_datetime(end_datetime, utc=True)
-        df = dm.get_ta_bars(symbol, start_time, end_time)
-        df.index = df.index.tz_convert('America/New_York') #THIS ALLOWS YOU TO READ YOUR DATAFRAME IN MARKET TIME. ALWAYS DO THIS FOR CONSISTANCY.
-
-        def get_ta_bars(self, symbol, start_date, end_date):
-            return self.alpaca.get_bars(symbol, timeframe = '15Min', start = start_date.isoformat(), end = end_date.isoformat(), limit = 1000, adjustment = 'raw').df
-        d
-
-
-    # Wait for market to open.
-        import threading
-        import time
-        import datetime
-
-        def awaitMarketOpen():
-            isOpen = alpaca.get_clock().is_open
-            while(not isOpen):
-                clock = alpaca.get_clock()
-                openingTime = clock.next_open.replace(tzinfo=datetime.timezone.utc).timestamp()
-                currTime = clock.timestamp.replace(tzinfo=datetime.timezone.utc).timestamp()
-                timeToOpen = int((openingTime - currTime) / 60)
-                print(str(timeToOpen) + " minutes til market open.")
-                time.sleep(60)
-                isOpen = self.alpaca.get_clock().is_open
-
-        print("Waiting for market to open...")
-        tAMO = threading.Thread(target=awaitMarketOpen())
-        tAMO.start()
-        tAMO.join()
-        print("Market opened.")
-
-
-    # 15 minutes till market close
-        import time
-        import datetime
-
-        clock = alpaca.get_clock()
-        closingTime = clock.next_close.replace(tzinfo=datetime.timezone.utc).timestamp()
-        currTime = clock.timestamp.replace(tzinfo=datetime.timezone.utc).timestamp()
-        timeToClose = closingTime - currTime
-        if(timeToClose < (60 * 15)):
-            print("Market closing soon.  Closing positions.")
-        print("Sleeping until market close (15 minutes).")
-        time.sleep(60 * 15)
-
-
     # Wait till market opens
-        def wait_for_market_open():
-            clock = alpaca.get_clock()
+        clock = alpaca.get_clock()
+        closing = clock.next_close - clock.timestamp
+        if round(closing.total_seconds() / 60) > 120:
             if not clock.is_open:
                 time_to_open = (clock.next_open - clock.timestamp).total_seconds()
+                print(f"Market is closed now going to sleep for ~{time_to_open.total_seconds()//3600} hours till {clock.next_open.ctime()}")
                 sleep(round(time_to_open))
-
-        def time_to_market_close():
-            clock = alpaca.get_clock()
-            closing = clock.next_close - clock.timestamp
-            return round(closing.total_seconds() / 60)
-
-        if time_to_market_close() > 120:
-            wait_for_market_open()
     		
-
     # Buy couple minutes before market close
         clock = alpaca.get_clock()
         if clock.is_open:
             time_until_close = clock.next_close - clock.timestamp # Wait to buy
             if time_until_close.seconds <= 120:
                 print('Buying positions...')
-                portfolio_cash = float(alpaca.get_account().cash)
-                quantity = portfolio_cash / price
-                alpaca.submit_order(symbol=symbol,qty=quantity,side='buy',type='market',time_in_force='day')
+                # or close all positions
+                # ...
                 print('Positions bought.')
-
+            print("Sleeping until market close (15 minutes).")
+            time_to_open = (clock.next_open - clock.timestamp).total_seconds()
+            sleep(round(time_to_open))
 
     # Sell everything a minute after the market opens
         clock = alpaca.get_clock()
@@ -993,7 +895,6 @@ import datetime as dt
             print('Liquidating positions.')
             alpaca.close_all_positions()
 
-
     # Check if data is current
         clock = alpaca.get_clock()
         current_time = clock.timestamp
@@ -1001,8 +902,7 @@ import datetime as dt
         minute_bar_is_old = snapshot_data.minute_bar.timestamp < current_time - pd.Timedelta(15, 'minutes')
         daily_bar_is_old = snapshot_data.daily_bar.timestamp < current_date
 
-
-    # Calculate n day volatility of intra_day gains
+    # Calculate X periods volatility of intra_day gains
         import numpy as np
         stock = 'SPY'
         PREV_STD_DAYS = 4
@@ -1014,39 +914,35 @@ import datetime as dt
         bar_data['volatility'] = bar_data.rolling(PREV_STD_DAYS).intra_day_gain.std()
         volatility = bar_data.volatility[-1]
 
-
-    # get data for last X days
+    # get last X trading days
         days_of_interest = 10
         current_day = alpaca.get_clock().timestamp.date().isoformat()
         trading_days = alpaca.get_calendar()
         trading_days_df = pd.DataFrame([day._raw for day in trading_days])
         my_dates = trading_days_df.query('date < @current_day').tail(days_of_interest)
-        symbol = 'SPY'
-        bars = alpaca.get_bars(symbol, '1Minute',
-                                    start=my_dates.head(1).date,
-                                    end=my_dates.tail(1).date, 
-                                    adjustment='all').df
-        market_hours_data = bars.between_time('9:30', '16:00')
-        after_hours_data =  bars.between_time('16:00', '9:30')
+
+    # split day into time buckets
+        test_Data.loc[test_Data.between_time('04:00:00', '7:59:00').index, 'Time_Slot'] = 'Early_pre_market'
+        test_Data.loc[test_Data.between_time('08:00:00', '9:28:00').index, 'Time_Slot'] = 'Immidiate_pre_market'
+        test_Data.loc[test_Data.between_time('09:29:00', '9:31:00').index, 'Time_Slot'] = 'Openning'
+        test_Data.loc[test_Data.between_time('09:32:00', '15:49:00').index, 'Time_Slot'] = 'Trading'
+        test_Data.loc[test_Data.between_time('15:50:00', '15:59:00').index, 'Time_Slot'] = 'Closing'
+        test_Data.loc[test_Data.between_time('16:00:00', '16:59:00').index, 'Time_Slot'] = 'Immidiate_after_market'
+        test_Data.loc[test_Data.between_time('17:00:00', '19:59:00').index, 'Time_Slot'] = 'Late_after_market'
+        test_Data.loc[test_Data.between_time('17:00:00', '19:59:00').index, 'Time_Slot'] = 'Late_after_market'
+
+    # tagging historical last and 1st trading day of a month
+        trading_days_df = pd.DataFrame([day._raw for day in alpaca.get_calendar("2014-12-01", "2022-05-23")])
+        trading_days_df['date'] = pd.to_datetime(trading_days_df['date'], format='%Y-%m-%d')
+        trading_days_df['DOM'] = np.where(trading_days_df.date.dt.to_period('M') != trading_days_df.date.shift().dt.to_period('M'), 'FDM', 
+                                 np.where(trading_days_df.date.dt.to_period('M') != trading_days_df.date.shift(-1).dt.to_period('M'), 'EOM', 'No'))   # FDM - 1st day of month, EOM - end of Month
+        trading_days_df = trading_days_df.set_index('date')
+        trading_days_df['Weekday_Name'] = trading_days_df.index.dayofweek # 0 = Monday
+        trading_days_df[19:24]
+        trading_days_df[(trading_days_df.session_close=='1600') | (trading_days_df.close=='1300')] # there are some closes at 13:00
 
 
-# Experiment 1
-
-    all_hist_capital = pd.read_csv('D:\\Data\\Other_data\\hist_capitalisation_index_constit.csv',parse_dates=['date'])
-    all_hist_capital = all_hist_capital.loc[all_hist_capital['rank'] < 51] # keep only top50 on every date
-
-    # delete symbols which appeared by mistake
-    unique_symb= all_hist_capital['symbol'].value_counts() # counts how many times each symbol appears
-    check_symb = all_hist_capital[all_hist_capital['symbol'].isin(unique_symb[unique_symb < 10].index)] # select rows, where symbol appears <10 times
-    check_symb = check_symb[check_symb['rank'] < 48] # if it is on the border than it's ok that it appear too few times
-    all_hist_capital = all_hist_capital[~all_hist_capital['symbol'].isin(set(check_symb.symbol))] # these symbols we shouldexclude from df as they probably appeared among top50 by mistake
-
-    # extract
-    test_capital = all_hist_capital.loc[all_hist_capital['rank'] < 5]
-    test_capital = test_capital.loc[test_capital['date'] > "2019"]
-    test_capital['date'].min().strftime("%Y-%m-%d") # check the earliest date
-    test_capital.to_csv('test_capital.csv')
-
-alpaca.get_news()
-alpaca.get_news(['AAPL','AMZN']) # default - 10 latest
-news = alpaca.get_news("AAPL", "2021-01-01", "2021-12-31")
+# News
+    alpaca.get_news()
+    alpaca.get_news(['AAPL','AMZN']) # default - 10 latest
+    news = alpaca.get_news("AAPL", "2021-01-01", "2021-12-31")

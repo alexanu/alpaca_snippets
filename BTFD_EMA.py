@@ -37,37 +37,28 @@ def prices(symbols):
     end_dt = now
     if now.time() >= pd.Timestamp('09:30', tz=NY).time():
         end_dt = now - pd.Timedelta(now.strftime('%H:%M:%S')) - pd.Timedelta('1 minute')
-
     start_dt = end_dt - pd.Timedelta('50 days')
-    start = start_dt.strftime('%Y-%m-%d')
-    end = end_dt.strftime('%Y-%m-%d')
 
-    def get_barset(symbol):
-        return alpaca.get_bars(symbol, TimeFrame.Day, start, end, limit=50, adjustment='raw').df
-
-    # The maximum number of symbols we can request at once is 200.
-    barset = None
+    barset = {}
     idx = 0
     while idx <= len(symbols) - 1:
-        if barset is None:
-            barset = get_barset(symbols[idx:idx+200])
-        else:
-            barset.update(get_barset(symbols[idx:idx+200]))
+        for symbol in symbols[idx:idx+200]: # The maximum number of symbols we can request at once is 200
+            bars = alpaca.get_bars(symbol, TimeFrame.Day, start_dt.isoformat(), end_dt.isoformat(), limit=50, adjustment='raw').df
+            barset[symbol] = bars
         idx += 200
 
-    return barset.df
+    return barset
 
 
-
-def calc_scores(price_df, dayindex=-1):
+def calc_scores(price_df):
     diffs = {}
     param = 10
-    for symbol in price_df.columns.levels[0]:
+    for symbol in price_df.keys():
         df = price_df[symbol]
-        if len(df.close.values) <= param:
+        if len(df.close.values) <= param: # skip if not enough data points to calculate the indicator
             continue
-        ema = df.close.ewm(span=param).mean()[dayindex]
-        last = df.close.values[dayindex]
+        ema = df.close.ewm(span=param).mean()[-1] # last value of indicator
+        last = df.close.values[-1] # latest price
         diff = (last - ema) / last
         diffs[symbol] = diff
 
