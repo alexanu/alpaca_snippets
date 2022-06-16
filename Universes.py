@@ -74,7 +74,6 @@ SP500_memb_2011_2021_RIC = ['SNI.OQ^C18', 'ZBH.N', 'SRE.N', 'KTB.N', 'TWTR.N', '
                         'NWSA.OQ', 'LXK.N^K16', 'CSX.OQ', 'BIIB.OQ', 'ALXN.OQ^G21', 'PETM.OQ^C15', 'UA.N', 'SBUX.OQ', 'IBM.N', 'NLSN.N', 'RF.N', 'EL.N', 
                         'DLR.N', 'PSX.N', 'COTY.N', 'UNP.N', 'TRIP.OQ', 'COF.N', 'TFCFA.OQ^C19', 'NEM.N', 'CHRW.OQ', 'SWN.N', 'ATO.N', 'PSA.N', 'KHC.OQ', 'LH.N', 'FDX.N']
 
-
 hist_index_member = ['AAPL', 'MSFT', 'AMZN', 'GOOG', 'GOOGL', 'FB', 'TSLA', 'BRK-B', 'V', 'JPM', 'JNJ', 'WMT', 
                     'NVDA', 'UNH', 'MA', 'HD', 'PG', 'DIS', 'BAC', 'PYPL', 'INTC', 'ASML', 'CMCSA', 'ADBE', 
                     'NFLX', 'VZ', 'XOM', 'KO', 'ORCL', 'CSCO', 'PFE', 'T', 'ABT', 'CRM', 'PEP', 'NKE', 'MRK', 

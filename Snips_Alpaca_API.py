@@ -697,8 +697,10 @@ import datetime as dt
 
 
         end_date = pd.Timestamp('now').date().isoformat()
+        end_date = dt.datetime.now().strftime("%Y-%m-%d")
         end_dt = alpaca.get_clock().timestamp.date().isoformat()
-        n_days_ago = (dt.datetime.now() - dt.timedelta(days=2)).strftime("%Y-%m-%d")
+        days = 200
+        n_days_ago = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
 
         AAPL = alpaca.get_bars("AAPL", TimeFrame.Minute, "2015-12-01", end_dt, limit=300, adjustment='all').df # 'dividend', 'split', 'all'
                                         # TimeFrame.Day, '1Day'
@@ -713,19 +715,15 @@ import datetime as dt
                                 #       1. Unistall existing alpaca SDK
                                 #       2. Install needed version: pip install alpaca-trade-api==1.4.1 --ignore-installed PyYAML
                                 #                                                  ingnore is needed as there was some problem with PyYAML
-            days = 200
             minute_frame = 10 # means 1 day is 39 rows => 43k rows for 5 years 
-            today = dt.datetime.now().strftime("%Y-%m-%d")
-            n_days_ago = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
             historicalData = {}
             for symbol in tickers:
-                temp = alpaca.get_bars(symbol, TimeFrame(minute_frame, TimeFrameUnit.Minute), n_days_ago, today,adjustment='raw').df
+                temp = alpaca.get_bars(symbol, TimeFrame(minute_frame, TimeFrameUnit.Minute), n_days_ago, end_date, adjustment='raw').df
                 temp.between_time('09:31', '16:00') # focus on market hours as for now trading on alpaca is restricted to market hours
                 temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
                 historicalData[symbol]=temp
 
-
-        # get minute data from 2015:
+        # get minute data from 2015 (1 csv - 1 ticker) + summary
 
             import Universes
             # column_names = ['symbol','start','end','num_rows','completed']
@@ -750,15 +748,12 @@ import datetime as dt
                     pass
             data_summary_df.to_excel('Alpaca_minute_quotes_overview.xlsx')
 
-
-
         # async modules for get_bars
             # you could use the new async modules for get_bars
             # https://github.com/alpacahq/alpaca-trade-api-python/blob/master/examples/historic_async.py
             # The problem with using threads is that it generates too many requests to the server. 
             #           Say I would like to get the last bar of 1000 symbols, 
             #           It would be less stressfull to request 1000 symbols directly, instead of asking one by one. 
-
 
         # Threads: ranks all stocks by percent change over the past 10 minutes (higher is better).
             import threading
@@ -780,7 +775,6 @@ import datetime as dt
                 tGetPC.join()
 
             rank()
-
 
         # Last trade and quote
             # Replicate v2 from v1 implementation

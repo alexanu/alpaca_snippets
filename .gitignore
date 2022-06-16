@@ -1,6 +1,9 @@
 Alpaca_config.txt
 Alpaca_config.py
 *.docx
+*.xlsx
+*.csv
+
 
 # Environments
 .env

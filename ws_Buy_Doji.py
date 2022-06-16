@@ -18,10 +18,6 @@ class BuyDoji:
   def run(self):
         async def on_minute(conn, channel, bar): # every Minute
             symbol = bar.symbol
-            print("Close: ", bar.close)
-            print("Open: ", bar.open)
-            print("Low: ", bar.low)
-            print(symbol)
             #Check for Doji
             if bar.close > bar.open and bar.open - bar.low > 0.1:
                 print('Buying on Doji!')
