@@ -78,7 +78,7 @@ def awaitMarketOpen():
 #%%
 
 def checkprice(tick):
-    return alpaca.get_last_trade(tick).price
+    return alpaca.get_latest_trade(tick).price
 
 def daytrade_sell_check(tick):
     
