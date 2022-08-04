@@ -2,18 +2,7 @@
 
 # Long SPY overnight then short intraday + stay out in times of high volatility and extreme market jumps. 
 
-
-
-# Switching to Cloud Functions has been fabulous. 
-# I spent $0.18 last month running both a paper and a live algo. 
-# But the real unanticipated surprise for me was error handling. 
-# Running my own box I was always checking my phone for algo status which I monitored via a 3rd party service. 
-# If the algo crashed I would need to manually restart everything. 
-# The usual reason for crashes was unhandled errors 
-# (I never appreciated all the things that can go wrong in real life). 
-# Now, if there is a crash I get a nice log entry explaining the issue but everything continues. 
-# I don’t need to do a thing (except code for the error if it happens again). 
-# Each time a function is called it is run on a brand new instance unaware the previous instance may have crashed. 
+# Run in the cloud
 
 # the only fee incurred with this strategy is margin for the ETF held overnight. 
 # There of course isn’t any commission, and I intentionally short only intraday. 
@@ -65,26 +54,14 @@ PREV_STD_DAYS = 4
 
 BUYING_POWER_CUSHION = 1.0 - .01
 
-# Alpaca keys etc
-ALPACA_API_ENDPOINT = 'https://paper-api.alpaca.markets'
-
-# Below is my test paper account 
-ALPACA_API_KEY_ID = 'XXXXXXX'
-ALPACA_API_SECRET_KEY = 'XXXXXX'
-
-# Below is my account with Unlimited data
-ALPACA_API_KEY_ID_DATA = 'XXXXXXX'
-ALPACA_API_SECRET_KEY_DATA = 'XXXXXXXX'
-
-api = alpacaapi.REST(ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY, ALPACA_API_ENDPOINT)
-api_data = alpacaapi.REST(ALPACA_API_KEY_ID_DATA, ALPACA_API_SECRET_KEY_DATA, ALPACA_API_ENDPOINT)
 
 # It's run as a single cloud function deployed on Google Cloud Functions, and triggered from 4 Google Scheduler  HTTP requests. 
-# For simplicity, I choose to embed the 4 functions I use into one and have an initial 'handler' which looks at the query parameter in the HTTP call. 
-# The handler looks at the parameter and executes the appropriate function. 
-# One could/should probably deploy this as 4 separate cloud functions  but this seemed easier to debug having the entire code in a single file.
-# The functions are scheduled just before markets open, after markets open, before markets close, and after markets close. 
-# They open an intraday ETF, close it, open an overnight ETF, and then close that respectively.
+# The functions are scheduled 
+#   just before markets open (open an intraday ETF), 
+#   after markets open (close it), 
+#   before markets close (open an overnight ETF), 
+#   and after markets close (close it). 
+
 
 def handle_request(request):
   """
@@ -119,7 +96,8 @@ def open_intraday_holdings():
   ok_volatility = daily_intraday_volatilty(SPY) < MAX_VOLATILITY # n-day intra-day volatility for SPY is not too high
 
   if ok_overnight_gain and ok_volatility:
-    order_target_percent(ETF_TO_HOLD_INTRA_DAY, -INTRADAY_LEVERAGE, time_in_force='opg', is_day_trade=True) # open intraday ETF short for the day
+    # open intraday ETF short for the day
+    order_target_percent(ETF_TO_HOLD_INTRA_DAY, -INTRADAY_LEVERAGE, time_in_force='opg', is_day_trade=True) 
                                                                         # opg: to submit “market on open” (MOO) and “limit on open” (LOO) orders - 
                                                                         # executed only in the market opening auction. 
                                                                         # Any unfilled orders after the open will be cancelled. 
@@ -263,7 +241,8 @@ def order_target_percent(symbol, percent, time_in_force, is_day_trade):
   Doesn't go from long->short or short->long. Will close position and raise an error.
   '''
   # Get the needed position and account data
-  positions = get_current_positions()
+  positions_list = api.list_positions()
+  positions_dict = {position.symbol: position for position in positions_list}
 
   # Get stock price if not in positions
   if symbol not in positions:
@@ -287,54 +266,33 @@ def order_target_percent(symbol, percent, time_in_force, is_day_trade):
   amt_has_different_sides = (current_dollar_amt<0 and target_dollar_amt>0) or (current_dollar_amt>0 and target_dollar_amt<0)
   decrease = not amt_has_different_sides and (abs(target_qty) < abs(current_qty))
   
-  if (target_dollar_amt==0) or amt_has_different_sides:
-    # Simply close the position
-    # No need to worry about buying power when closing
-    order = order_qty(symbol, -current_qty, time_in_force)
+  if (target_dollar_amt==0) or amt_has_different_sides: # Simply close the position
+    try:
+      order = api.submit_order(stock, abs(current_qty), side, 'market', time_in_force)
+      log.info('ordered {} shares of {}'.format(qty, symbol))
+    except Exception as err:
+      log.error('tried to order {} shares of {}. {}'.format(qty, symbol, err))
   
-  elif decrease:
-    # order delta shares. No need to worry about buying power.
-    order = order_qty(symbol, delta_qty, time_in_force)
+  elif decrease: # order delta shares
+    try:
+      order = api.submit_order(symbol, abs(delta_qty), side, 'market', time_in_force)
+      log.info('ordered {} shares of {}'.format(delta_qty, symbol))
+    except Exception as err:
+      log.error('tried to order {} shares of {}. {}'.format(delta_qty, symbol, err))
 
-  else:
-    # It's an increase in the position. Need to check buying power.
+
+  else: # increase in the position
     buying_power = float(account.daytrading_buying_power) if is_day_trade else float(account.regt_buying_power)
     max_amt = min(buying_power * BUYING_POWER_CUSHION, abs(delta_amt))
     adjusted_amt = math.copysign(max_amt, delta_amt)
     adjusted_qty = int(adjusted_amt / current_price)
-    order = order_qty(symbol, adjusted_qty, time_in_force)
+    try:
+      order = api.submit_order(symbol, abs(adjusted_qty), side, 'market', time_in_force)
+      log.info('ordered {} shares of {}'.format(adjusted_qty, symbol))
+    except Exception as err:
+      log.error('tried to order {} shares of {}. {}'.format(adjusted_qty, symbol, err))
+
     if adjusted_amt < delta_amt:
       log.warning('not enough buying power. day trade: {}  desired trade amt: {}  buying power {}'.format(is_day_trade, delta_amt, buying_power))
 
   return order
-
-def get_current_positions():
-  """
-  Return the positions as a dict endexed by symbol
-  """
-  positions_list = api.list_positions()
-  positions_dict = {position.symbol: position for position in positions_list}
-
-  return positions_dict  
-
-def order_qty(stock, qty, time_in_force):
-  """
-  Submit an order for specified qty of shares
-  Doesn't really try to order 0 shares but doesn't error either
-  Note this doesn't check buying power or available qty
-  """
-  try:
-    if qty > 0:
-      order = api.submit_order(stock, abs(qty), side, 'market', time_in_force)
-    elif qty <0:
-      order = api.submit_order(stock, abs(qty), side, 'market', time_in_force)
-    else:
-      order = None
-
-    log.info('ordered {} shares of {}'.format(qty, stock))
-
-  except Exception as err:
-    log.error('tried to order {} shares of {}. {}'.format(qty, stock, err))
-
-  return order
-  

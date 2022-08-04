@@ -8,8 +8,8 @@ import time
 
 import alpaca_trade_api as tradeapi
 from Alpaca_config import *
-from utils import *
-api = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, api_version='v2')
+import utils_for_alpaca
+alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, api_version='v2')
 
 mail_subject = "Trading 10min range breakouts with Alpaca paper"
 strategy_name = "Break_out_10min"
@@ -25,8 +25,8 @@ active_trade = False
 done_for_the_day = False
 
 # check if market is open
-api.cancel_all_orders()
-clock = api.get_clock()
+alpaca.cancel_all_orders()
+clock = alpaca.get_clock()
 
 if clock.is_open:
     pass
@@ -34,10 +34,10 @@ else:
     time_to_open = clock.next_open - clock.timestamp
     mail_content = f"Market is closed now going to sleep for ~{time_to_open.total_seconds()//3600} hours till {clock.next_open.ctime()}"
     print(mail_content)
-    sent_alpaca_email(mail_subject, mail_content)
+    utils_for_alpaca.sent_alpaca_email(mail_subject, mail_content)
     sleep(time_to_open.total_seconds())
 
-if len(api.list_positions()) == 0:
+if len(alpaca.list_positions()) == 0:
     searching_for_trade = True
 else:
     active_trade = True
@@ -64,30 +64,13 @@ sleep(10)
 
 
 # functions
-def time_to_market_close():
-    clock = api.get_clock()
-    closing = clock.next_close - clock.timestamp
-    return round(closing.total_seconds() / 60)
-
 
 def send_order(direction):
-    if time_to_market_close() > 20: # send order only it is enough time till market close
-        if direction == 'buy':
-            sl = high - range_size
-            tp = high + range_size
-        elif direction == 'sell':
-            sl = low + range_size
-            tp = low - range_size
-
-        api.submit_order(symbol='AAPL',qty=100,
-                        client_order_id= strategy_name + "_" + str(int(time.mktime(api.get_clock().timestamp.timetuple()))), # unique client order
-                        side=direction,type='market',time_in_force='day',order_class='bracket',
-                        stop_loss=dict(stop_price=str(sl)),
-                        take_profit=dict(limit_price=str(tp)))
+    if utils_for_alpaca.time_to_market_close() > 20: # send order only it is enough time till market close
+        alpaca.submit_order(symbol='AAPL',qty=100,side=direction,type='market',time_in_force='day')
         return True, False # order_sent, done_for_the_day
     else: # ...otherwise: done_for_the_day
         return False, True # order_sent, done_for_the_day
-
 
 
 # main loop
@@ -135,7 +118,7 @@ while True:
                     order_submitted = False
                     active_trade = True
                     mail_content = "A {item.order['side']} order filled for {item.order['symbol']} at {item.order['filled_avg_price']}"
-                    sent_alpaca_email(mail_subject, mail_content)
+                    utils_for_alpaca.sent_alpaca_email(mail_subject, mail_content)
                     trade_msg = []
 
         while active_trade:
@@ -155,7 +138,7 @@ while True:
             clock = api.get_clock()
             next_market_open = clock.next_open - clock.timestamp
             mail_content = mail_content + f" and sleeping till {clock.next_open.ctime()}"
-            sent_alpaca_email(mail_subject, mail_content)
+            utils_for_alpaca.sent_alpaca_email(mail_subject, mail_content)
             sleep(next_market_open.total_seconds())
             searching_for_trade = True
 

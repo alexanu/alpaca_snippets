@@ -15,33 +15,24 @@ NY = 'America/New_York'
 alpaca = tradeapi.REST()
 
 
+diffs = {}
+param = 10
 
-
-    price_df = get_market_snapshot(alpaca)
-    diffs = {}
-    param = 10
-    for symbol in price_df.index:
-        df = price_df[symbol]
-        if len(df.close.values) <= param:
+for symbol in Universe_SP500:
+    try:
+        temp = alpaca.get_bars(symbol, TimeFrame.Day, n_days_ago, end_date, adjustment='raw').df
+        temp.between_time('09:31', '16:00') # focus on market hours as for now trading on alpaca is restricted to market hours
+        temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
+        if len(temp.close.values) <= param:
             continue
-        ema = df.close.ewm(span=param).mean()[-1]
-        last = df.close.values[dayindex]
+        ema = temp.close.ewm(span=param).mean()[-1]
+        last = temp.close.values[-1]
         diff = (last - ema) / ema
         diffs[symbol] = diff
+    except:
+        continue
 
-    df = pd.DataFrame(diffs.items(), columns=('symbol', 'score')).set_index('symbol')
-    df = df[pd.notnull(df.score)]
-    df.score = df.score / np.linalg.norm(df.score) * -0.5 + 0.5
-    return df
+df = pd.DataFrame(diffs.items(), columns=('symbol', 'score')).set_index('symbol')
+df = df[pd.notnull(df.score)]
+df.score = df.score / np.linalg.norm(df.score) * -0.5 + 0.5
 
-def main():
-    price_df = prices(Universe_SP500)
-    df = calc_scores(price_df)
-
-    buf = StringIO()
-    print(df.to_csv(buf))
-    print(buf.getvalue())
-
-
-if __name__ == '__main__':
-    main()

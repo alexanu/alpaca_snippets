@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from Alpaca_config import * # contains fmp key as well
 alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
+NY = 'America/New_York'
 
 import logging
 logging.basicConfig(filename='./new_5min_ema.log', format='%(name)s - %(levelname)s - %(message)s')
@@ -19,7 +20,7 @@ def run_checker(Universe, fast, slow):
     print('run_checker started')
     clock = alpaca.get_clock()
     if clock.is_open: # add check if it is later than 10am
-        end_dt = pd.Timestamp.now(tz='America/New_York') # change this to current time
+        end_dt = pd.Timestamp.now(tz=NY) # change this to current time
         barset = {}
         idx = 0
         while idx <= len(Universe) - 1: # takes around 2 minutes
@@ -37,13 +38,13 @@ def run_checker(Universe, fast, slow):
         for signal in signals:
             if signals[signal] == 1:
                 if signal not in [x.symbol for x in alpaca.list_positions()]:
-                    logging.warning('{} {} - {}'.format(datetime.datetime.now(tz).strftime("%x %X"), signal, signals[signal]))
+                    logging.warning('{} {} - {}'.format(datetime.datetime.now(tz=NY).strftime("%x %X"), signal, signals[signal]))
                     alpaca.submit_order(signal, 1, 'buy', 'market', 'day')
                     # print(datetime.datetime.now(tz).strftime("%x %X"), 'buying', signals[signal], signal)
             else:
                 try:
                     alpaca.submit_order(signal, 1, 'sell', 'market', 'day')
-                    logging.warning('{} {} - {}'.format(datetime.datetime.now(tz).strftime("%x %X"), signal, signals[signal]))
+                    logging.warning('{} {} - {}'.format(datetime.datetime.now(tz=NY).strftime("%x %X"), signal, signals[signal]))
                 except Exception as e:
                     # print('No sell', signal, e)
                     pass

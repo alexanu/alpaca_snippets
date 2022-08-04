@@ -2,6 +2,7 @@
 # requirements.txt
     alpaca-trade-api
     google-cloud-storage==1.30.0
+    gspread oauth2client
 
 
 # Data from external API to csv and store to bucket
@@ -194,3 +195,40 @@
             "status_code": response.status, 
             "response": response.data
         })
+
+# Reading Google Sheet from GCF
+    # "API and overview" => "Enable API and services" => "Google Drive API" and enable it 
+    #      Credentials => Create Credentials => Service Account:
+    #           Service account name: alpaca-strategies-capital
+    #           Service account ID: alpaca-strategies-capital
+    #           Google Sheet Name Service account name: alpaca-strategies-capital
+    #           Role: Basic => Editor
+    #           Click on newly created service => Keys => Create New Key => JSON
+
+    # "API and overview" => "Enable API and services" => "Google Sheets API" and enable it
+
+    # pip install gspread oauth2client
+
+
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    from pprint import pprint as pp
+    scope = ["https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive"]
+
+    creds = ServiceAccountCredentials.from_json_keyfile_name("alpaca-strategies-capital-creds.json",scope)
+    client = gspread.authorize(creds)
+    sheet = client.open("alpaca-strategies-capital").sheet1   
+    data = sheet.get_all_records() 
+    pp(data)
+    row = sheet.row_values(3)
+    pp(row)
+    col = sheet.col_values(3)
+    pp(col)
+    insertRow = ['Buy_Doji', 'Yes', 'Many','Hourly', '1000', 'Disabled', 'No', 'ws_Buy_Doji']
+    sheet.insert_row(insertRow,6)
+    print("The row has been added")
+    sheet.delete_row(2)
+

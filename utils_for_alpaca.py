@@ -1,6 +1,16 @@
 import pandas as pd
 import logging as log
 import math
+from time import sleep
+
+def get_allocated_capital(strategy):
+    sheet_id = '1jg-IXE4GcEpnT8BR7fUZKW7PzFF6eSN9OgGeGmQnU38'
+    sheet_name = 'Sheet1'
+    url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}'
+    df = pd.read_csv(url)
+    strategy_allocated_capital = df[df.Strategy_ID == strategy]['Allocated_Capital'].values[0]
+    return strategy_allocated_capital
+
 
 def sent_alpaca_email(mail_subject, mail_content):
     import smtplib
@@ -109,3 +119,34 @@ def overnight_gain(api,stk):
     log.debug('overnight gain calc. current price: {}  prev close price: {}  gain: {}'.format(price_current, price_prev_close, gain_close_to_current ))
 
     return gain_close_to_current
+
+def daytrade_sell_check(api, symbol, DAYTRADE_PATTERN_PROTECTION=True):
+    today= datetime.date.today().isoformat()
+    activities= api.get_activities(after=today)
+    activities= pd.DataFrame([a._raw for a in activities])
+    if activities.size > 0:
+        not_active_today= symbol not in list(activities['symbol'])
+    else:
+        not_active_today= True
+    
+    if not DAYTRADE_PATTERN_PROTECTION:
+        return True
+    elif DAYTRADE_PATTERN_PROTECTION and not_active_today :
+        return True
+    else:
+        return False
+
+def time_to_market_close(api):
+    clock = api.get_clock()
+    closing = clock.next_close - clock.timestamp
+    return round(closing.total_seconds() / 60)
+
+def wait_for_market_open(api):
+	clock = api.get_clock()
+	if not clock.is_open:
+		time_to_open = clock.next_open - clock.timestamp
+		sleep_time = round(time_to_open.total_seconds())
+		sleep(sleep_time)
+	return clock
+
+

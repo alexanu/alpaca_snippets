@@ -65,7 +65,6 @@ class MartingaleTrader(object):
         total_buying_power = self.margin_multiplier * self.equity
         print(f'Initial total buying power = {total_buying_power}')
 
-
     def start_trading(self):
         conn = Stream(
             self.key_id,

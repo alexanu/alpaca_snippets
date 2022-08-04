@@ -1,22 +1,13 @@
 import threading
-from time import sleep
-
 import alpaca_trade_api as tradeapi
 import pandas as pd
 
+import utils_for_alpaca
 from Alpaca_config import *
 api = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, api_version='v2')
 conn = tradeapi.stream2.StreamConn(API_KEY_PAPER, API_SECRET_PAPER, base_url=API_BASE_URL_PAPER, data_url=API_DATA_URL, data_stream='alpacadatav1')
 
 trade_taken = False
-
-def wait_for_market_open():
-	clock = api.get_clock()
-	if not clock.is_open:
-		time_to_open = clock.next_open - clock.timestamp
-		sleep_time = round(time_to_open.total_seconds())
-		sleep(sleep_time)
-	return clock
 
 
 # define websocket callbacks
@@ -44,17 +35,15 @@ ws_thread.start()
 # main
 while True:
 
-	clock = wait_for_market_open()
+	clock = utils_for_alpaca.wait_for_market_open()
 
 	ewa = api.get_barset('EWA', 'day', limit=25)
 	enzl = api.get_barset('ENZL', 'day', limit=25)
 
-	data_df = pd.concat(
-		[ewa.df.EWA.close, enzl.df.ENZL.close],
-		axis=1,
-		join='inner',
-		keys=['ewa', 'enzl'],
-	)
+	data_df = pd.concat([ewa.df.EWA.close, enzl.df.ENZL.close],
+						axis=1,
+						join='inner',
+						keys=['ewa', 'enzl'])
 	data_df.enzl[-1] = 0
 	data_df.ewa[-1] = 0
 
