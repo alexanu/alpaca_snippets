@@ -18,17 +18,16 @@ import datetime as dt
 
 
 # SDK
-    import alpaca_trade_api as tradeapi
-    tradeapi.__version__
-    from alpaca_trade_api.rest import TimeFrame
-
-
-
     import Universes
     from Alpaca_config import *
-    alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
-    alpaca = tradeapi.REST(API_KEY_REAL, API_SECRET_REAL, API_BASE_URL_REAL, 'v2')
 
+    # Old SDK (maintained till 2022): https://github.com/alpacahq/alpaca-trade-api-python
+        import alpaca_trade_api as tradeapi
+        tradeapi.__version__
+        from alpaca_trade_api.rest import TimeFrame
+        alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
+        alpaca = tradeapi.REST(API_KEY_REAL, API_SECRET_REAL, API_BASE_URL_REAL, 'v2')
+    
 
 # Account information
 
@@ -888,6 +887,20 @@ import datetime as dt
     trades.index = trades.index.tz_convert('America/New_York')
     raw_bars.index = raw_bars.index.tz_convert('America/New_York') # Convert to market time for easier reading
     temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
+
+
+    # get pre-market trades for several days
+        symbols = ['IBM', 'F']
+        start = pd.to_datetime('2021-01-01').tz_localize('America/New_York').tz_convert('America/New_York').normalize()
+        end = pd.to_datetime('2021-01-05').tz_localize('America/New_York').tz_convert('America/New_York').normalize()
+        trading_calendars = api_data.get_calendar(start_date_et.isoformat(), end_date_et.isoformat())
+        trading_days = [pd.to_datetime(calendar.date).tz_localize('America/New_York') for calendar in trading_calendars]
+        pre_market_trades = pd.DataFrame()
+        for day in trading_days:
+            begin_pre_market = day + pd.Timedelta('9:00:00')
+            end_pre_market = day + pd.Timedelta('9:29:00')
+            day_trades = api_data.get_trades(symbols, begin_pre_market.isoformat(), end_pre_market.isoformat()).df
+            pre_market_trades = pre_market_trades.append(day_trades)
 
 
 

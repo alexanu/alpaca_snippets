@@ -1,3 +1,5 @@
 alpaca-trade-api>=0.25
 ta
 sklearn
+twilio
+pandas

@@ -9,6 +9,18 @@
     3) git push
     '''
 
-# check url or remote: git config --get remote.origin.url
+# check url or remote: 
+git config --get remote.origin.url
 
-# update local content from Github: git pull origin main
+# update local content from Github: 
+git pull origin main
+
+# Virtual Environments for Windows:
+## Conda:
+  Check available v env: conda info --envs
+  Create venv: conda create -n NAMEOFENV
+  Activate env: conda activate NAMEOFENV
+  Deactivate env: conda deactivate
+  Delete env: conda env remove -n NAMEOFENV
+
+  

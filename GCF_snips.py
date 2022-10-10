@@ -16,7 +16,8 @@
         json = data.json()
         df = pd.DataFrame(json[endpoint])
         client = storage.Client(project='example-project-123')
-        bucket = client.get_bucket('example-storage-bucket')    blob = bucket.blob(filename)
+        bucket = client.get_bucket('example-storage-bucket')    
+        blob = bucket.blob(filename)
         blob.upload_from_string(df.to_csv(index = False),content_type = 'csv')
 
 
@@ -67,7 +68,8 @@
             # the result will appear on localhost:8080
         # Install Insomnia for testing API requests => Create Request Collection => Create New Request (POST, JSON)
         # Put "localhost:8080" in URL field near "Send Button"
-        # Enter JSON which will be send to localhost and envoce function Hello => output will appear on the right
+        # Enter JSON which will be send to localhost and envoke function submit_custom_order => output will appear on the right
+        # after success, deploy to GCF. You will get an url of the function. Put this url into insomnia for testing
 
 
 # Submit custom order
@@ -95,12 +97,12 @@
 
         account = alpaca.get_account()
 
-        return {
-            'Order ID': order.id,
-            'Order Time': str(order.created_at),
-            'Order Status': order.status,
-            'Buying Power': float(account.buying_power)
-        }
+            return {
+                'Order ID': order.id,
+                'Order Time': str(order.created_at),
+                'Order Status': order.status,
+                'Buying Power': float(account.buying_power)
+            }
 
 
 # Schedule => PubSub => Function => Storage

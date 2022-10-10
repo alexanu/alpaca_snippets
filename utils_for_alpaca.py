@@ -71,6 +71,33 @@ def get_market_snapshot(api):
     snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
     return snapshot_df
 
+def get_open_orders_after_df(api, start_time):
+    CHUNK_SIZE = 500
+    all_orders = []
+    check_for_more_orders = True
+    while check_for_more_orders:
+        api_orders = api.list_orders(status='all', after=start_time.isoformat(), direction='asc', limit=CHUNK_SIZE, nested=False)
+        all_orders.extend(api_orders)
+        if len(api_orders) == CHUNK_SIZE: # Since length equals the CHUNK_SIZE there may be more orders
+            start_time = all_orders[-3].submitted_at   # Set the ending timestamp for the next chunk of orders
+                                                        # A hack to work around complex orders having the same submitted_at time
+                                                        # and avoid potentially missing one, is to get more than we need
+        else: # That was the final chunk so exit
+            check_for_more_orders = False
+    orders_df = pd.DataFrame([order._raw for order in all_orders])
+    orders_df.drop_duplicates('id', inplace=True)
+    open_orders_df = orders_df.query('status in ["new", "held"]') # Return only the 'open' orders (ie not filled, replaced, etc)
+    open_orders_df.set_index('symbol', inplace=True)
+    return open_orders_df
+
+def get_positions_df():
+    positions_list = api.list_positions()
+    positions_df = pd.DataFrame([position._raw for position in positions_list])
+    positions_df.set_index('symbol', inplace=True)
+    return positions_df
+
+
+
 def get_all_trades(api):
     count = 0
     search = True
