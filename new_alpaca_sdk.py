@@ -10,16 +10,18 @@ import random
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus
-from alpaca.trading.requests import GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TrailingStopOrderRequest
+from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TrailingStopOrderRequest, GetPortfolioHistoryRequest
 from alpaca.data import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest, StockTradesRequest, StockQuotesRequest, StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import Adjustment, DataFeed, Exchange
+from alpaca.broker.client import BrokerClient
 import alpaca
 alpaca.__version__
 
 trading_client = TradingClient(API_KEY_PAPER, API_SECRET_PAPER) # dir(trading_client)
 stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
+broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_version="v2")
 
 
 
@@ -32,6 +34,7 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
         # Check our current balance vs. our balance at the last market close
         balance_change = round(float(account.equity) - float(account.last_equity),2) 
 
+        
         account.portfolio_value
         account.buying_power # buying power is 2x equity if 2000 < equity < 25000, and 4x equity if equity > 25000
         account.regt_buying_power # regulation T buying power = (2 x equity) - (long_position_value - short_position_value)
@@ -50,6 +53,22 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
         account.sma
 
 
+        # Portfolio history
+            data_pf = broker_client.get_portfolio_history_for_account(
+                                        trading_client.get_account().id,
+                                        GetPortfolioHistoryRequest(period='2W', # <number> + <unit>: D, W, M, A
+                                                                    timeframe='5Min', # 1Min, 5Min, 15Min, 1H, 1D
+                                                                    extended_hours = True)
+                                                        )
+            data_pf['lagged_equity'] = data_pf.equity.shift(1)
+            data_pf['pct_change'] = data_pf.profit_loss / data_pf.lagged_equity
+            # filter by date if desired
+            dateFilter = '2021-01-19'
+            data = data_pf[data_pf.timestamp >= dateFilter].reset_index(drop=True)
+
+
+
+
         # Get fees
             # the fees post the day after the trading
             # Since I'm trying to look at a daily P&L net of fees, ...
@@ -57,87 +76,96 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
             # ... which gets a touch complicated with weekends and holidays
 
 
-# Orders
-        # https://alpaca.markets/docs/trading-on-alpaca/orders/
+# Submit orders
+        # Understanding orders: https://alpaca.markets/docs/trading-on-alpaca/orders/
+        # Nice overview of different order types: https://alpaca.markets/learn/13-order-types-you-should-know-about/
+        # From Feb 2022 Alpaca allows trading from 4am till 8pm ET (10am - 2am Munich Time)
+                    # Rules for submitting orders for extended hours: https://alpaca.markets/docs/trading-on-alpaca/orders/#extended-hours-trading
+                    # extended_hours=True & type='limit' & time_in_force=TimeInForce.DAY:
+                            # A limit orders with a limit price that significantly exceeds the current market price will be rejected
+                            # Any other order types, including market orders, will be rejected
+                            # extended hours order must be DAY limit orders
+                    # Your extended hour order will be processed and filled immediately.
+            # Orders not eligible for extended hours 
+            #       submitted between 4:00pm - 7:00pm ET will be rejected.
+            #       submitted after 7:00pm ET will be queued and eligible for execution at the time of the next market open
 
-        # Submit orders
-                # Nice overview of different order types: https://alpaca.markets/learn/13-order-types-you-should-know-about/
-                # From Feb 2022 Alpaca allows trading from 4am till 8pm ET (10am - 2am Munich Time)
-                            # Rules for submitting orders for extended hours: https://alpaca.markets/docs/trading-on-alpaca/orders/#extended-hours-trading
-                            # extended_hours=True & type='limit' & time_in_force=TimeInForce.DAY:
-                                    # A limit orders with a limit price that significantly exceeds the current market price will be rejected
-                                    # Any other order types, including market orders, will be rejected
-                                    # extended hours order must be DAY limit orders
-                            # Your extended hour order will be processed and filled immediately.
-                    # Orders not eligible for extended hours 
-                    #       submitted between 4:00pm - 7:00pm ET will be rejected.
-                    #       submitted after 7:00pm ET will be queued and eligible for execution at the time of the next market open
+        dir(TimeInForce)
+        # Time in force: https://alpaca.markets/docs/trading-on-alpaca/orders/#time-in-force
+            '''
+            gtc - good-till-cancelled
+            day - eligible for execution only on the day it is live (9:30am - 4:00pm ET)
+            opg - use it to submit “market on open” (MOO) and “limit on open” (LOO) orders
+            cls - use it to submit “market on close” (MOC) and “limit on close” (LOC) orders
+            ioc - Immediate Or Cancel (IOC) - all or part of the order to be executed immediately
+            fok - Fill or Kill (FOK)
+            '''
 
-                dir(TimeInForce)
-                # Time in force: https://alpaca.markets/docs/trading-on-alpaca/orders/#time-in-force
-                    '''
-                    gtc - good-till-cancelled
-                    day - eligible for execution only on the day it is live (9:30am - 4:00pm ET)
-                    opg - use it to submit “market on open” (MOO) and “limit on open” (LOO) orders
-                    cls - use it to submit “market on close” (MOC) and “limit on close” (LOC) orders
-                    ioc - Immediate Or Cancel (IOC) - all or part of the order to be executed immediately
-                    fok - Fill or Kill (FOK)
-                    '''
-
-                strategy_name = "Break_out_10min"
-                coid = strategy_name + "_" + str(int(time.mktime(alpaca.get_clock().timestamp.timetuple())))
-                ticker = 'SPY'
-                ticker = random.choice(Universes.Spiders)
-                limit_buy = 0.99 # how limit price should be different from current ask
-                stop_loss = trail_sl = 5 # in %, easy stop-loss, I should use ATR() like in zorro probably
-                
-                latest_quote = stock_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=[ticker]))
-                limit_price_target = round(latest_quote[ticker].ask_price*limit_buy,0)
-                quantity = int(float(account.buying_power)//latest_quote[ticker].ask_price)
+        strategy_name = "Break_out_10min"
+        coid = strategy_name + "_" + str(int(time.mktime(alpaca.get_clock().timestamp.timetuple())))
+        ticker = 'SPY'
+        ticker = random.choice(Universes.Spiders)
+        limit_buy = 0.99 # how limit price should be different from current ask
+        stop_loss = trail_sl = 5 # in %, easy stop-loss, I should use ATR() like in zorro probably
+        
+        latest_quote = stock_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=[ticker]))
+        limit_price_target = round(latest_quote[ticker].ask_price*limit_buy,0)
+        quantity = int(float(account.buying_power)//latest_quote[ticker].ask_price)
 
 
-                # Market order
-                    market_order_data = MarketOrderRequest(
-                        symbol=ticker,
-                        qty=quantity,
-                        side=OrderSide.BUY, # dir(OrderSide)
-                        # extended_hours = True, # not possible for market order
-                        client_order_id = coid,
-                        stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss/100)),
-                        time_in_force=TimeInForce.GTC) # dir(TimeInForce)
-                    market_order = trading_client.submit_order(order_data=market_order_data)
-                    print(f"Buying {quantity} of {ticker}. Buing power left is {float(account.buying_power)}")
+        # Market order
+            market_order_data = MarketOrderRequest(
+                symbol=ticker,
+                qty=quantity,
+                side=OrderSide.BUY, # dir(OrderSide)
+                # extended_hours = True, # not possible for market order
+                client_order_id = coid,
+                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss/100)),
+                time_in_force=TimeInForce.GTC) # dir(TimeInForce)
+            market_order = trading_client.submit_order(order_data=market_order_data)
+            print(f"Buying {quantity} of {ticker}. Buing power left is {float(account.buying_power)}")
 
-                # Trailing order
-                    trailing_sl_order_data = TrailingStopOrderRequest(
-                        symbol=ticker,
-                        qty=3,
-                        side=OrderSide.BUY, # dir(OrderSide)
-                        # extended_hours = True, # not possible for traling order
-                        client_order_id = 'testing trailing order 1',
-                        trail_percent=trail_sl,
-                        time_in_force=TimeInForce.GTC) # dir(TimeInForce)
-                    trailing_order = trading_client.submit_order(order_data=trailing_sl_order_data)
+        # Trailing order
+            trailing_sl_order_data = TrailingStopOrderRequest(
+                symbol=ticker,
+                qty=3,
+                side=OrderSide.BUY, # dir(OrderSide)
+                # extended_hours = True, # not possible for traling order
+                client_order_id = 'testing trailing order 1',
+                trail_percent=trail_sl,
+                time_in_force=TimeInForce.GTC) # dir(TimeInForce)
+            trailing_order = trading_client.submit_order(order_data=trailing_sl_order_data)
 
-                # Limit order
-                    limit_order_data = LimitOrderRequest(symbol=ticker,
-                                                        limit_price=limit_price_target,
-                                                        qty=1,
-                                                        side=OrderSide.BUY,
-                                                        extended_hours = True,
-                                                        client_order_id = coid,
-                                                        stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss)),
-                                                        time_in_force=TimeInForce.DAY) # dir(TimeInForce), extended hours order must be DAY limit orders
-                    limit_order = trading_client.submit_order(order_data=limit_order_data)
-
-
-                trading_client.close_position('SPY') 
-                trading_client.close_all_positions(cancel_orders=True) # closes all position AND also cancels all open orders
+        # Limit order
+            limit_order_data = LimitOrderRequest(symbol=ticker,
+                                                limit_price=limit_price_target,
+                                                qty=1,
+                                                side=OrderSide.BUY,
+                                                extended_hours = True,
+                                                client_order_id = coid,
+                                                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss)),
+                                                time_in_force=TimeInForce.DAY) # dir(TimeInForce), extended hours order must be DAY limit orders
+            limit_order = trading_client.submit_order(order_data=limit_order_data)
 
 
-                trading_client.cancel_orders() 
-                trading_client.cancel_order_by_id() 
-                trading_client.replace_order_by_id()
+        trading_client.close_position('SPY') 
+        trading_client.close_all_positions(cancel_orders=True) # closes all position AND also cancels all open orders
+
+        # Take profit
+            positions = trading_client.get_all_positions()
+            for position in positions:
+                profit = position.unrealized_pl
+                percentChange = (profit/position.cost_basis) * 100
+                if (percentChange > 5):
+                    print("Selling {} shares of {}".format(position.qty,position.symbol))
+                    trading_client.submit_order(MarketOrderRequest(symbol=position.symbol,qty=position.qty,side=OrderSide.SELL,client_order_id = coid,time_in_force=TimeInForce.OPG))
+
+
+            
+
+        trading_client.cancel_orders() 
+        trading_client.cancel_order_by_id() 
+        trading_client.replace_order_by_id()
 
 
 
@@ -149,56 +177,64 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
             '''
 
 
-        # Order list, executed trades, positions
+# Order list, executed trades, positions
 
-                dir(OrderStatus) # 'ACCEPTED', 'ACCEPTED_FOR_BIDDING', 'CALCULATED', 'CANCELED', 'DONE_FOR_DAY', 'EXPIRED', 'REJECTED', 'REPLACED',
-                                # 'FILLED', 'NEW', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_NEW', 'PENDING_REPLACE',  'STOPPED', 'SUSPENDED'
-                    # full list of statuses: https://alpaca.markets/docs/trading-on-alpaca/orders/#order-lifecycle
-                        # Updates on orders states at Alpaca will be sent over the streaming interface
-
-
-                date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S') # orders for last 30 days
-                date_filter = (pd.Timestamp.now()- pd.Timedelta(5, "minutes")).floor(freq='S'), # orders for last 5 minutes
-                date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S').isoformat() # isoformat also works
-
-            # extract all orders to df
-                request_params = GetOrdersRequest(status='all', # only 'open', 'closed', 'all'. Not the same as OrderStatus
-                                                after = date_filter,
-                                                side=OrderSide.BUY)
-                orders = trading_client.get_orders(filter=request_params)
-                orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders),axis=1).T
-                columns_to_convert = ['created_at','updated_at','submitted_at','filled_at','expired_at','canceled_at','failed_at','replaced_at']
-                for column in columns_to_convert:
-                    try:
-                        orders_df[column] = orders_df[column].dt.ceil(freq='s').dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
-                                                            # round till seconds
-                                                                                # convert from UTC to local time 
-                                                                                                                # remove time zone
-                    except: # this we need as empty columns could give error
-                        pass
-                orders_df.to_excel('orders.xlsx')
-
-            # filter by client id
-                search_string = 'esting'
-                filtered_orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders if search_string in order.client_order_id),axis=1).T
-
-                # So these 2 below are not really needed. Or maybe to check the Order Status of a recently sent order, which ID is still in variable
-                    trading_client.get_order_by_client_id()
-                    trading_client.get_order_by_id()
-
-            SPY_orders = [o for o in orders if o.symbol == 'SPY']
-            open_sell_symbols = {order.symbol for order in orders if order.side == "buy" and order.status == "canceled" and order.filled_at == None}
+        dir(OrderStatus) # 'ACCEPTED', 'ACCEPTED_FOR_BIDDING', 'CALCULATED', 'CANCELED', 'DONE_FOR_DAY', 'EXPIRED', 'REJECTED', 'REPLACED',
+                        # 'FILLED', 'NEW', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_NEW', 'PENDING_REPLACE',  'STOPPED', 'SUSPENDED'
+            # full list of statuses: https://alpaca.markets/docs/trading-on-alpaca/orders/#order-lifecycle
+                # Updates on orders states at Alpaca will be sent over the streaming interface
 
 
-            # current positions
-                positions = trading_client.get_all_positions()
-                positions_df = pd.concat((pd.DataFrame(position).set_index(0) for position in positions),axis=1)
-                positions_df = positions_df.T.apply(pd.to_numeric, errors='ignore').T # convert strings to numeric
-                positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']] = positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']].applymap("{0:.2f}".format)
+        date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S') # orders for last 30 days
+        date_filter = (pd.Timestamp.now()- pd.Timedelta(5, "minutes")).floor(freq='S'), # orders for last 5 minutes
+        date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S').isoformat() # isoformat also works
 
-                trading_client.get_open_position('XLF')
+    # extract all orders to df
+        request_params = GetOrdersRequest(status='all', # only 'open', 'closed', 'all'. Not the same as OrderStatus
+                                        after = date_filter,
+                                        side=OrderSide.BUY)
+        orders = trading_client.get_orders(filter=request_params)
+        orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders),axis=1).T
+        columns_to_convert = ['created_at','updated_at','submitted_at','filled_at','expired_at','canceled_at','failed_at','replaced_at']
+        for column in columns_to_convert:
+            try:
+                orders_df[column] = orders_df[column].dt.ceil(freq='s').dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
+                                                    # round till seconds
+                                                                        # convert from UTC to local time 
+                                                                                                        # remove time zone
+            except: # this we need as empty columns could give error
+                pass
+        orders_df.to_excel('orders.xlsx')
+
+    # filter by client id
+        search_string = 'esting'
+        filtered_orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders if search_string in order.client_order_id),axis=1).T
+
+        # So these 2 below are not really needed. Or maybe to check the Order Status of a recently sent order, which ID is still in variable
+            trading_client.get_order_by_client_id()
+            trading_client.get_order_by_id()
+
+    SPY_orders = [o for o in orders if o.symbol == 'SPY']
+    open_sell_symbols = {order.symbol for order in orders if order.side == "buy" and order.status == "canceled" and order.filled_at == None}
 
 
+    # current positions
+        positions = trading_client.get_all_positions()
+        positions_symbols_set = {p.symbol for p in positions}
+
+        try:
+            position = trading_client.get_open_position('XLF').qty
+        except: # No position exists
+            position = 0
+
+        positions[1]._get_value
+        positions_df = pd.DataFrame([p for p in positions])
+
+        positions_df = pd.concat((pd.DataFrame(position).set_index(0) for position in positions),axis=1)
+        positions_df = positions_df.T.apply(pd.to_numeric, errors='ignore').T # convert strings to numeric
+        positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']] = positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']].applymap("{0:.2f}".format)
+
+        
 # Assets
     # 'shortable' = True, 'easy_to_borrow' = True, 'marginable' = True, asset_class=None
     # Alpaca currently uses its clearing firms ‘Easy To Borrow’ list and assumes everything else is Hard To Borrow. 
@@ -211,8 +247,13 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
                                     )
                                 )
  
+    assets[1]
+    assets_mr = [asset.maintenance_margin_requirement for asset in assets]
+    from collections import Counter
+    Counter(assets_mr)
+
     exclude_strings = ['Etf', 'ETF', 'Lp', 'L.P', 'Fund', 'Trust', 'Depositary', 'Depository', 'Note', 'Reit', 'REIT']
-    assets_in_scope = [asset.symbol for asset in assets
+    assets_in_scope = [asset for asset in assets
                         if asset.exchange != 'OTC' # OTC stocks play by different rules than Exchange Traded stocks (often referred to as NMS). 
                                                    # Data reporting is even different. 
                                                    # It’s not that one shouldn’t trade OTC stocks but be aware they have different rules. 
@@ -228,9 +269,9 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
                                                 # Alpaca Trading Team manually reviews stocks to qualify as ‘fractionable’. 
                                                 # This is entirely an Alpaca designation and other brokers may have different ‘fractionable’ stocks
                         and asset.easy_to_borrow 
+                        and asset.maintenance_margin_requirement == 30
                         and not (any(ex_string in asset.name for ex_string in exclude_strings))]
     len(assets), len(assets_in_scope)
-    assets[500].maintenance_margin_requirement
 
 
     positions = trading_client.get_all_positions()
@@ -240,33 +281,59 @@ stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
     trading_client.get_asset(ticker).easy_to_borrow*trading_client.get_asset(ticker).shortable
 
 
+# Clock & Calendar
+
+    alpaca_calendar = trading_client.get_calendar()
+    len(alpaca_calendar)
+
+    now = pd.Timestamp.today() + pd.offsets.Day(-1)
+    MonthEnd = (now + pd.offsets.BusinessMonthEnd(normalize=True)).strftime("%Y-%m-%d")
+    trading_till_moe = trading_client.get_calendar(GetCalendarRequest(start=now.strftime("%Y-%m-%d"), end=MonthEnd))
+    len(trading_till_moe)
+    pd.Timestamp(trading_till_moe[0].close).strftime("%b %d, %H:%M")
+    (dt.datetime.now()- trading_till_moe[0].close).total_seconds() // 3600
+    pd.Timestamp.now(tz="EST") - trading_till_moe[0].close
+    trading_client.get_calendar(GetCalendarRequest(start="2021-02-08", end="2021-02-18"))
+    alpaca_calendar[0]
+
+    dt.tz
+    pd.Timestamp(trading_till_moe[0].close).tz_localize('US/Eastern').tz_convert('UTC')
+    trading_till_moe[0].close.dt.tz_localize('EST').tz_convert('CET')
+    import pytz
+    trading_till_moe[0].close.replace(tzinfo=pytz.timezone('US/Eastern')).astimezone(tz="")
+
+    print(f'Today is {pd.Timestamp.today().day_name()}, {pd.Timestamp.now(tz="CET").tz_localize(None).strftime("%b %d, %H:%M") } in Munich, which is {pd.Timestamp.now(tz="EST").tz_localize(None).strftime("%H:%M")} in New York')
+    time_to_open = (clock.next_open - clock.timestamp).total_seconds()//3600
+    print(f'Market is currently closed. Will open in {time_to_open} hours')
+    time_to_close = (clock.timestamp - clock.next_close).total_seconds()//3600
+    print(f'Market is currently open. Will close in {time_to_close} hours')
 
 
-# ------------------------------------------------------------
-
-
-trading_client.get_calendar()
-trading_client.get_clock() # errror
-
-
-trading_client.get_watchlists()
-trading_client.get_watchlist_by_id()
-trading_client.create_watchlist()
-trading_client.delete_watchlist_by_id()
-trading_client.update_watchlist_by_id()
-trading_client.add_asset_to_watchlist_by_id()
-trading_client.remove_asset_from_watchlist_by_id()
 
 
 
+    clock = trading_client.get_clock()
 
-trading_client.get_corporate_annoucements() # error
-trading_client.get_corporate_announcment_by_id() # error
+    if not clock.is_open:
+        time_to_open = round((clock.next_open - clock.timestamp).total_seconds()/3600,1)
+    else:
+        time_to_close = (clock.timestamp - clock.next_close).total_seconds()//3600
 
 
 
+    closing = clock.next_close - clock.timestamp
+    if round(closing.total_seconds() / 60) > 120:
+        if not clock.is_open:
+            time_to_open = (clock.next_open - clock.timestamp).total_seconds()//3600
+            print(f"Market is closed now going to sleep for ~{time_to_open.total_seconds()//3600} hours till {clock.next_open.ctime()}")
+            sleep(round(time_to_open))
 
 
+
+# Corporate announcements
+
+    trading_client.get_corporate_annoucements() # error
+    trading_client.get_corporate_announcment_by_id() # error
 
 
 
@@ -282,23 +349,135 @@ trading_client.get_corporate_announcment_by_id() # error
 
 # Market data stocks ----------------------------------------------------------------------------------------------------------------
 
-stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
 
-bars_request_params = StockBarsRequest(
-    symbol_or_symbols=["SPY"], 
-    start = (pd.Timestamp.now(tz="US/Eastern") - pd.Timedelta(2, "days")).floor(freq='S'), # T - for minutes, H - for hours
-    end = pd.Timestamp.now(), # do I need to convert to ET? (tz="US/Eastern") or UTC? pd.Timestamp.utcnow()
-    # limit = 100, # upper limit of number of data points
-    timeframe=TimeFrame.Minute, # 'Day', 'Hour', 'Minute', 'Month', 'Week'
-    adjustment= Adjustment.RAW, # SPLIT, DIVIDEND, ALL
-    feed = DataFeed.SIP
-    )
-hist_bars = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) # drop level is needed as 1st it appears with multiindex with symbol
-hist_bars.index = hist_bars.index.tz_convert('America/New_York') # Convert to market time for easier reading
-hist_bars.index = hist_bars.index.tz_localize(None) # remove +00:00 from datetime
+        # Snapshot
+            scope_tickers = Universes.TOP10_US_SECTOR
+            snap = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=scope_tickers, feed = DataFeed.SIP))
+            snapshot_data = {stock: [snapshot.latest_trade.price, 
+                                    snapshot.previous_daily_bar.close,
+                                    snapshot.daily_bar.close,
+                                    (snapshot.daily_bar.close/snapshot.previous_daily_bar.close)-1,
+                                    ]
+                            for stock, snapshot in snap.items() if snapshot and snapshot.daily_bar and snapshot.previous_daily_bar
+                            }
+            snapshot_columns=['price', 'prev_close', 'last_close', 'gain']
+            snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
+            top_gainers_over_3_dollars = snapshot_df.query('price>3').nlargest(10, 'gain')
 
 
+            SPY = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=['SPY'], feed = DataFeed.SIP))
+            now_time = SPY['SPY'].daily_bar.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            yesterday_close_time = SPY['SPY'].previous_daily_bar.timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
+
+        # Bars
+
+            # for 1 symbol
+                bars_request_params = StockBarsRequest(
+                    symbol_or_symbols=['SPY'], 
+                    start = (pd.Timestamp.now(tz="US/Eastern") - pd.Timedelta(2, "days")).floor(freq='S'), # T - for minutes, H - for hours
+                    end = pd.Timestamp.now(), # do I need to convert to ET? (tz="US/Eastern") or UTC? pd.Timestamp.utcnow()
+                    # limit = 100, # upper limit of number of data points
+                    timeframe=TimeFrame.Minute, # 'Day', 'Hour', 'Minute', 'Month', 'Week'
+                    adjustment= Adjustment.RAW, # SPLIT, DIVIDEND, ALL
+                    feed = DataFeed.SIP
+                    )
+                hist_bars = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) 
+                                                                                # drop level is needed as 1st it appears with multiindex with symbol
+                                                                                # if in request there were >1 symbol, this should NOT be used
+                hist_bars.index = hist_bars.index.tz_convert('America/New_York').tz_localize(None)
+                                                    # Convert to market time for easier reading
+                                                                                # remove +00:00 from datetime
+
+            # for many symbols
+                bars_request_params = StockBarsRequest(
+                    symbol_or_symbols=Universes.Spiders, 
+                    start = (pd.Timestamp.now(tz="US/Eastern") - pd.Timedelta(2, "days")).floor(freq='S'), # T - for minutes, H - for hours
+                    end = pd.Timestamp.now(), # do I need to convert to ET? (tz="US/Eastern") or UTC? pd.Timestamp.utcnow()
+                    # limit = 100, # upper limit of number of data points
+                    timeframe=TimeFrame.Minute, # 'Day', 'Hour', 'Minute', 'Month', 'Week'
+                    adjustment= Adjustment.RAW, # SPLIT, DIVIDEND, ALL
+                    feed = DataFeed.SIP
+                    )
+                hist_bars = stock_client.get_stock_bars(bars_request_params).df.reset_index()
+                hist_bars.timestamp = hist_bars.timestamp.dt.tz_convert('America/New_York').dt.tz_localize(None) 
+                                                                # Convert to market time for easier reading
+                                                                                            # remove +00:00 from datetime
+
+            # for not-standard timeframes (e.g. 5min, 30min)
+                minute_frame = 30
+                bars_request_params = StockBarsRequest(
+                    symbol_or_symbols=Universes.Spiders, 
+                    start = (pd.Timestamp.now(tz="US/Eastern") - pd.Timedelta(6, "days")).floor(freq='S'), # T - for minutes, H - for hours
+                    end = pd.Timestamp.now(), # do I need to convert to ET? (tz="US/Eastern") or UTC? pd.Timestamp.utcnow()
+                    # limit = 100, # upper limit of number of data points
+                    timeframe=TimeFrame(minute_frame, TimeFrameUnit.Minute), # 'Day', 'Hour', 'Minute', 'Month', 'Week'
+                    adjustment= Adjustment.RAW, # SPLIT, DIVIDEND, ALL
+                    feed = DataFeed.SIP
+                    )
+                hist_bars = stock_client.get_stock_bars(bars_request_params).df.reset_index()
+                hist_bars.timestamp = hist_bars.timestamp.dt.tz_convert('America/New_York').dt.tz_localize(None) 
+                                                                # Convert to market time for easier reading
+                                                                                            # remove +00:00 from datetime
+
+            # get minute data from 2015 (1 csv - 1 ticker) + summary
+
+                import Universes
+                # column_names = ['symbol','start','end','num_rows','completed']
+                # data_summary_df = pd.DataFrame(columns = column_names)
+                data_summary_df = pd.read_excel('Alpaca_minute_quotes_overview.xlsx',index_col=0) # checking current status
+                need_symbols = Universes.hist_index_member
+                need_symbols = Universes.TOP10_US_SECTOR
+                done_symbols=data_summary_df.symbol.to_list() # already downloaded symbols
+                still_missing = list(set(need_symbols) - set(done_symbols))
+                Alpaca_directory = 'D:\\Data\\minute_data\\US\\alpaca_ET_adj\\'
+                for idx, symbol in enumerate(still_missing):
+                    try:
+                        temp = alpaca.get_bars(symbol, TimeFrame.Minute, "2015-12-01", "2022-05-20", adjustment='all').df
+                        temp.index = temp.index.tz_convert('America/New_York') # Convert to market time for easier reading
+                        temp.index = temp.index.tz_localize(None) # remove +00:00 from datetime
+                        nameoffile=Alpaca_directory+symbol+"_ET_adj_alpaca.csv"
+                        temp.to_csv(nameoffile)
+                        data_summary_df.loc[len(done_symbols)+idx+1] = [symbol, temp.index[0], temp.index[-1],len(temp)]
+                    except:
+                        print('Failure with {}'.format(symbol))
+                        data_summary_df.loc[len(done_symbols)+idx+1] = [symbol, "no", "no",0]
+                        pass
+                data_summary_df.to_excel('Alpaca_minute_quotes_overview.xlsx')
+
+                Tickers=[]
+                Tickers.append([x.split('_ET_')[0] for x in os.listdir(Alpaca_directory) if x.endswith(".csv")])
+                Tickers[1]
+
+            # async modules for get_bars
+                # you could use the new async modules for get_bars
+                # https://github.com/alpacahq/alpaca-trade-api-python/blob/master/examples/historic_async.py
+                # The problem with using threads is that it generates too many requests to the server. 
+                #           Say I would like to get the last bar of 1000 symbols, 
+                #           It would be less stressfull to request 1000 symbols directly, instead of asking one by one. 
+
+            # Threads: ranks all stocks by percent change over the past 10 minutes (higher is better).
+                import threading
+                stockUniverse = ['DOMO', 'TLRY', 'SQ', 'MRO', 'AAPL', 'GM', 'SNAP', 'SHOP']
+                period_length = 10
+                allStocks = []
+                for stock in stockUniverse:
+                    allStocks.append([stock, 0])
+
+                def getPercentChanges():
+                    length = 10
+                    for i, stock in enumerate(allStocks):
+                        bars = alpaca.get_bars(stock[0], TimeFrame.Day, pd.Timestamp('now').date()- dt.timedelta(days=period_length),pd.Timestamp('now').date(), limit=length,adjustment='raw')
+                        allStocks[i][1] = (bars[len(bars) - 1].c - bars[0].o) / bars[0].o
+
+                def rank():
+                    tGetPC = threading.Thread(target=getPercentChanges)
+                    tGetPC.start()
+                    tGetPC.join()
+
+                rank()
+
+# Latest Bar
 latest_bars = stock_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=["SPY", "GLD", "TLT"], feed = DataFeed.SIP))
 latest_bars['SPY'].open # ask_exchange, ask_price, ask_size, bid_exchange, bid_price, bid_size, conditions, tape, timestamp
 pd.DataFrame(latest_bars) # How to put this to DF?
