@@ -10,23 +10,27 @@
 #  (borrow fees are only assessed on overnight holdings). 
 
 
-# The above numbers do not take into account dividends. 
-# Another reason I intentionally do not short overnight is dividends. 
-# One must pay (not receive) dividends for any stock held overnight on the dividend payment date. 
-# Since this strategy only shorts intraday there aren’t any dividend liabilities. 
+# Another reason not to short overnight but only to short intraday is dividends: one must pay (not receive) dividends for any stock held overnight on the dividend payment date. 
 # There are however credits for the long stock held overnight if held on a dividend pay date. 
-# The dividend payout in the overnight ETF is about 1.5%. 
-# Therefore the annual dividend is about .015 x 1.25 or about 1.8%. 
+# The dividend payout in the overnight ETF is about 1.5% => the annual dividend is about .015 x 1.25 or about 1.8%. 
 # When live trading this I found dividends accounted for a little less (closer to 1.2%) since every so often I would miss a payment date. 
 
 
-# First install and import the Alpaca python API SDK 'wrapper'
 import logging as log
 
-import alpaca_trade_api as alpacaapi
-from alpaca_trade_api.rest import TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.requests import StockSnapshotRequest, StockBarsRequest
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.enums import DataFeed, Adjustment
+from alpaca.data.timeframe import TimeFrame
 
-# Import some useful packages
+
+from Alpaca_config import *
+trading_client = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
+stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
+
 import math
 import numpy as np
 import pandas as pd
@@ -35,6 +39,8 @@ import pandas as pd
 
     # Intraday I actually short DIA (not SPY): Alpaca doesn't allow moving a position from long to short (or vice versa) in a single step. 
     # Moving between two similar ETFs is a workaround. DIA seemed like a close proxy. 
+
+STRATEGY_NAME = "Long_Overnight_Short_Intraday"
 ETF_TO_HOLD_INTRA_DAY = 'SPY' # SP500 ETF
 ETF_TO_HOLD_OVERNIGHT = 'DIA' # DOW ETF
 SPY = 'SPY'
@@ -71,16 +77,16 @@ def handle_request(request):
   function = request.args.get('function')
   log.info('request was {}'.format(function))
 
-  if function == 'open_intraday_holdings':
+  if function == 'open_intraday_holdings': # on 9:20am
     open_intraday_holdings()
 
-  elif function == 'close_intraday_holdings':
+  elif function == 'close_intraday_holdings': # on 10am
     close_intraday_holdings()
 
-  elif function == 'open_overnight_holdings':
+  elif function == 'open_overnight_holdings': # on 3:45am
     open_overnight_holdings()
 
-  elif function == 'close_overnight_holdings':
+  elif function == 'close_overnight_holdings': # on 9am
     close_overnight_holdings()
 
   else:
@@ -97,12 +103,7 @@ def open_intraday_holdings():
 
   if ok_overnight_gain and ok_volatility:
     # open intraday ETF short for the day
-    order_target_percent(ETF_TO_HOLD_INTRA_DAY, -INTRADAY_LEVERAGE, time_in_force='opg', is_day_trade=True) 
-                                                                        # opg: to submit “market on open” (MOO) and “limit on open” (LOO) orders - 
-                                                                        # executed only in the market opening auction. 
-                                                                        # Any unfilled orders after the open will be cancelled. 
-                                                                        # OPG orders submitted after 9:28am but before 7:00pm ET will be rejected. 
-                                                                        # OPG orders submitted after 7:00pm will be queued and routed to the following day’s opening auction. 
+    order_target_percent(ETF_TO_HOLD_INTRA_DAY, -INTRADAY_LEVERAGE, time_in_force='opg', is_day_trade=True) # “market on open” (MOO): should arrive after 7pm on t-1 or before 9:28am on t
     log.info('Overnight gain and volatility OK. Short intraday ETF')
   else:
     # This shouldn't be open but close if it is.
@@ -116,12 +117,7 @@ def close_intraday_holdings():
   Close intra day ETF at end of day if held.
   Do this early in case it's a short trading day
   """
-  order_target_percent(ETF_TO_HOLD_INTRA_DAY, 0, time_in_force='cls', is_day_trade=True)
-                                                    # cls: to submit “market on close” (MOC) and “limit on close” (LOC) orders. 
-                                                    # This order is eligible to execute only in the market closing auction. 
-                                                    # Any unfilled orders after the close will be cancelled. 
-                                                    # CLS orders submitted after 3:50pm but before 7:00pm ET will be rejected. 
-                                                    # CLS orders submitted after 7:00pm will be queued and routed to the following day’s closing auction.
+  order_target_percent(ETF_TO_HOLD_INTRA_DAY, 0, time_in_force='cls', is_day_trade=True) # “market on close” (MOC): should arrive before 3:50pm (if normal trading day)
   return
 
 def open_overnight_holdings():
@@ -129,12 +125,7 @@ def open_overnight_holdings():
   ok_intra_day_gain = MAX_INTRA_DAY_LOSS < intraday_gain(SPY) < MAX_INTRA_DAY_GAIN # intra-day SPY gain is a little positive (not too high or negative) 
   ok_volatility = daily_intraday_volatilty(SPY) < MAX_VOLATILITY # n-day intra-day volatility for SPY is not too high
   if ok_intra_day_gain and ok_volatility:
-    order_target_percent(ETF_TO_HOLD_OVERNIGHT, OVERNIGHT_LEVERAGE, time_in_force='cls', is_day_trade=False)
-                                                                        # cls: to submit “market on close” (MOC) and “limit on close” (LOC) orders. 
-                                                                        # This order is eligible to execute only in the market closing auction. 
-                                                                        # Any unfilled orders after the close will be cancelled. 
-                                                                        # CLS orders submitted after 3:50pm but before 7:00pm ET will be rejected. 
-                                                                        # CLS orders submitted after 7:00pm will be queued and routed to the following day’s closing auction.
+    order_target_percent(ETF_TO_HOLD_OVERNIGHT, OVERNIGHT_LEVERAGE, time_in_force='cls', is_day_trade=False) # “market on close” (MOC): should arrive before 3:50pm (if normal trading day)
     log.info('Intraday gain and volatility OK. Long overnight ETF')
   else:
     # This shouldn't be open but close if it is.
@@ -146,12 +137,7 @@ def close_overnight_holdings():
   """
   Close our overnight ETF at open next day.
   """
-  order_target_percent(ETF_TO_HOLD_OVERNIGHT, 0, time_in_force='opg', is_day_trade=False)
-                                                        # opg: to submit “market on open” (MOO) and “limit on open” (LOO) orders - 
-                                                        # executed only in the market opening auction. 
-                                                        # Any unfilled orders after the open will be cancelled. 
-                                                        # OPG orders submitted after 9:28am but before 7:00pm ET will be rejected. 
-                                                        # OPG orders submitted after 7:00pm will be queued and routed to the following day’s opening auction. 
+  order_target_percent(ETF_TO_HOLD_OVERNIGHT, 0, time_in_force='opg', is_day_trade=False) # “market on open” (MOO): should arrive after 7pm on t-1 or before 9:28am on t
   return
 
 
@@ -162,57 +148,47 @@ def overnight_gain(stock):
   """
   Calculates overnight gain (last close to current price)
   """
-  # Get snapshot data
-  snapshot_data = api_data.get_snapshot(stock)
+
+  snapshot_data = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=stock, feed = DataFeed.SIP))
 
   # Check if data is current
-  clock = api.get_clock()
-  current_time = clock.timestamp
-  current_date = clock.timestamp.normalize()
-
-  minute_bar_is_old = snapshot_data.minute_bar.timestamp < current_time - pd.Timedelta(15, 'minutes')
+  clock = trading_client.get_clock()
+  minute_bar_is_old = snapshot_data[stock].minute_bar.timestamp < clock.timestamp - pd.Timedelta(15, 'minutes')
   if minute_bar_is_old:
-    log.warning('minute data is more than 15 minutes old. timestamp. is: {}'.format(snapshot_data.minute_bar.timestamp))
-
-  daily_bar_is_old = snapshot_data.daily_bar.timestamp < current_date
+    log.warning(f'minute data is more than 15 minutes old. timestamp. is: {snapshot_data[stock].minute_bar.timestamp}')
+  daily_bar_is_old = snapshot_data[stock].daily_bar.timestamp < clock.timestamp
   if daily_bar_is_old:
-    log.warning('daily data isnt current. timestamp. is: {}'.format(snapshot_data.daily_bar.timestamp))
+    log.warning(f'daily data isnt current. timestamp. is: {snapshot_data[stock].daily_bar.timestamp}')
 
   # Calculate gain (even if old data)
-  price_current = snapshot_data.minute_bar.close
-  price_prev_close = snapshot_data.prev_daily_bar.close
-
+  price_current = snapshot_data[stock].minute_bar.close
+  price_prev_close = snapshot_data[stock].previous_daily_bar.close
   gain_close_to_current = math.log(price_current / price_prev_close)
-  log.debug('overnight gain calc. current price: {}  prev close price: {}  gain: {}'.format(price_current, price_prev_close, gain_close_to_current ))
+  log.debug(f'overnight gain calc. current price: {price_current}  prev close price: {price_prev_close}  gain: {gain_close_to_current}')
 
   return gain_close_to_current
 
 def intraday_gain(stock):
   """
-  Calculates intra-day gain (open to current price)
+  Calculates overnight gain (last close to current price)
   """
-  # Get snapshot data
-  snapshot_data = api_data.get_snapshot(stock)
+
+  snapshot_data = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=stock, feed = DataFeed.SIP))
 
   # Check if data is current
-  clock = api.get_clock()
-  current_time = clock.timestamp
-  current_date = clock.timestamp.normalize()
-
-  minute_bar_is_old = snapshot_data.minute_bar.timestamp < current_time - pd.Timedelta(15, 'minutes')
+  clock = trading_client.get_clock()
+  minute_bar_is_old = snapshot_data[stock].minute_bar.timestamp < clock.timestamp - pd.Timedelta(15, 'minutes')
   if minute_bar_is_old:
-    log.warning('minute data is more than 15 minutes old. timestamp. is: {}'.format(snapshot_data.minute_bar.timestamp))
-
-  daily_bar_is_old = snapshot_data.daily_bar.timestamp < current_date
+    log.warning(f'minute data is more than 15 minutes old. timestamp. is: {snapshot_data[stock].minute_bar.timestamp}')
+  daily_bar_is_old = snapshot_data[stock].daily_bar.timestamp < clock.timestamp
   if daily_bar_is_old:
-    log.warning('daily data isnt current. timestamp. is: {}'.format(snapshot_data.daily_bar.timestamp))
+    log.warning(f'daily data isnt current. timestamp. is: {snapshot_data[stock].daily_bar.timestamp}')
 
   # Calculate gain (even if old data)
-  price_current = snapshot_data.minute_bar.close
-  price_open = snapshot_data.prev_daily_bar.open
-
+  price_current = snapshot_data[stock].minute_bar.close
+  price_open = snapshot_data[stock].previous_daily_bar.open
   gain_open_to_current = math.log(price_current / price_open)
-  log.debug('intraday gain calc. current price: {}  open price: {}  gain: {}'.format(price_current, price_open, gain_open_to_current ))
+  log.debug(f'intraday gain calc. current price: {price_current}  day open price: {price_open}  overnight gain: {gain_open_to_current}')
 
   return gain_open_to_current
 
@@ -221,12 +197,19 @@ def daily_intraday_volatilty(stock):
   Calculate n day volatility of intra_day gains
   """
   # Fetch more days than needed
-  today = api.get_clock().timestamp.date()
+  today = trading_client.get_clock().timestamp
   previous_day = today - pd.Timedelta('1D')
   previous_day_10 = today - pd.Timedelta('10D')
 
-  bar_data = api.get_bars(stock, TimeFrame.Day, previous_day_10.isoformat(), previous_day.isoformat(), 'raw' ).df
-
+  bars_request_params = StockBarsRequest(
+      symbol_or_symbols=stock, 
+      start = previous_day_10,
+      end = previous_day,
+      timeframe=TimeFrame.Day,
+      adjustment= Adjustment.RAW,
+      feed = DataFeed.SIP
+      )
+  bar_data = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) # drop level is needed as 1st it appears with multiindex with symbol
   bar_data['intra_day_gain'] = np.log(bar_data.close/bar_data.open)
   bar_data['volatility'] = bar_data.rolling(PREV_STD_DAYS).intra_day_gain.std()
   volatility = bar_data.volatility[-1]
@@ -241,20 +224,20 @@ def order_target_percent(symbol, percent, time_in_force, is_day_trade):
   Doesn't go from long->short or short->long. Will close position and raise an error.
   '''
   # Get the needed position and account data
-  positions_list = api.list_positions()
+  positions_list = trading_client.get_all_positions()
   positions_dict = {position.symbol: position for position in positions_list}
 
   # Get stock price if not in positions
-  if symbol not in positions:
-    current_price = api.get_snapshot("SPY").minute_bar.close
+  if symbol not in positions_dict:
+    current_price = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=ETF_TO_HOLD_INTRA_DAY, feed = DataFeed.SIP))[ETF_TO_HOLD_INTRA_DAY].minute_bar.close
     current_dollar_amt = 0.0
     current_qty = 0.0
   else:
-    current_price = float(positions[symbol].current_price)
-    current_dollar_amt = float(positions[symbol].market_value)
-    current_qty = float(positions[symbol].qty)
+    current_price = float(positions_dict[symbol].current_price)
+    current_dollar_amt = float(positions_dict[symbol].market_value)
+    current_qty = float(positions_dict[symbol].qty)
 
-  account = api.get_account()
+  account = trading_client.get_account()
   portfolio_value = float(account.equity)
   target_dollar_amt = (portfolio_value * percent)
 
@@ -265,21 +248,32 @@ def order_target_percent(symbol, percent, time_in_force, is_day_trade):
 
   amt_has_different_sides = (current_dollar_amt<0 and target_dollar_amt>0) or (current_dollar_amt>0 and target_dollar_amt<0)
   decrease = not amt_has_different_sides and (abs(target_qty) < abs(current_qty))
-  
+
+  coid = STRATEGY_NAME + "_" + str(int(time.mktime(trading_client.get_clock().timestamp.timetuple())))
+
   if (target_dollar_amt==0) or amt_has_different_sides: # Simply close the position
     try:
-      order = api.submit_order(stock, abs(current_qty), side, 'market', time_in_force)
-      log.info('ordered {} shares of {}'.format(qty, symbol))
+      order_data = MarketOrderRequest(symbol=symbol,
+                                      qty=abs(current_qty),
+                                      side = OrderSide.SELL if current_qty > 0 else OrderSide.BUY,
+                                      client_order_id = coid,
+                                      time_in_force=time_in_force)
+      order = trading_client.submit_order(order_data=order_data)
+      log.info('ordered {} shares of {}'.format(current_qty, symbol))
     except Exception as err:
-      log.error('tried to order {} shares of {}. {}'.format(qty, symbol, err))
+      log.error('tried to order {} shares of {}. {}'.format(current_qty, symbol, err))
   
   elif decrease: # order delta shares
     try:
-      order = api.submit_order(symbol, abs(delta_qty), side, 'market', time_in_force)
+      order_data = MarketOrderRequest(symbol=symbol,
+                                      qty=abs(delta_qty),
+                                      side = OrderSide.SELL if delta_qty < 0 else OrderSide.BUY,
+                                      client_order_id = coid,
+                                      time_in_force=time_in_force)
+      order = trading_client.submit_order(order_data=order_data)
       log.info('ordered {} shares of {}'.format(delta_qty, symbol))
     except Exception as err:
       log.error('tried to order {} shares of {}. {}'.format(delta_qty, symbol, err))
-
 
   else: # increase in the position
     buying_power = float(account.daytrading_buying_power) if is_day_trade else float(account.regt_buying_power)
@@ -287,8 +281,13 @@ def order_target_percent(symbol, percent, time_in_force, is_day_trade):
     adjusted_amt = math.copysign(max_amt, delta_amt)
     adjusted_qty = int(adjusted_amt / current_price)
     try:
-      order = api.submit_order(symbol, abs(adjusted_qty), side, 'market', time_in_force)
-      log.info('ordered {} shares of {}'.format(adjusted_qty, symbol))
+      order_data = MarketOrderRequest(symbol=symbol,
+                                      qty=abs(adjusted_qty),
+                                      side = OrderSide.SELL if adjusted_qty < 0 else OrderSide.BUY,
+                                      client_order_id = coid,
+                                      time_in_force=time_in_force)
+      order = trading_client.submit_order(order_data=order_data)
+     log.info('ordered {} shares of {}'.format(adjusted_qty, symbol))
     except Exception as err:
       log.error('tried to order {} shares of {}. {}'.format(adjusted_qty, symbol, err))
 

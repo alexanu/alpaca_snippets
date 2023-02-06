@@ -3,177 +3,112 @@ import logging as log
 import math
 from time import sleep
 
-def get_allocated_capital(strategy):
-    sheet_id = '1jg-IXE4GcEpnT8BR7fUZKW7PzFF6eSN9OgGeGmQnU38'
-    sheet_name = 'Sheet1'
-    url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}'
-    df = pd.read_csv(url)
-    strategy_allocated_capital = df[df.Strategy_ID == strategy]['Allocated_Capital'].values[0]
-    return strategy_allocated_capital
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+from Alpaca_config import *
+
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, CorporateActionType, CorporateActionSubType
+from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TrailingStopOrderRequest, GetPortfolioHistoryRequest, GetCorporateAnnouncementsRequest
+from alpaca.data.requests import StockLatestQuoteRequest, StockTradesRequest, StockQuotesRequest, StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.data.enums import Adjustment, DataFeed, Exchange
+
+from alpaca.trading.client import TradingClient
+from alpaca.data import StockHistoricalDataClient
+from alpaca.broker.client import BrokerClient
 
 
-def sent_alpaca_email(mail_subject, mail_content):
-    import smtplib
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
+class Alpaca:
+    def _auth_trading(self):
+        trading_client = TradingClient(API_KEY_PAPER, API_SECRET_PAPER) # dir(trading_client)
+        return trading_client
 
-    from Alpaca_config import sender_address, sender_pass, receiver_address
+    def _auth_hist(self):
+        stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
+        return stock_client
 
-    #Setup the MIME
-    message = MIMEMultipart()
-    message['From'] = 'Alpaca Paper'
-    message['To'] = receiver_address
-    message['Subject'] = mail_subject   #The subject line
-
-    #The body and the attachments for the mail
-    message.attach(MIMEText(mail_content, 'plain'))
-    #Create SMTP session for sending the mail
-    session = smtplib.SMTP('smtp.gmail.com', 587) #use gmail with port
-    session.starttls() #enable security
-    session.login(sender_address, sender_pass) #login with mail_id and password
-    text = message.as_string()
-    session.sendmail(sender_address, receiver_address, text)
-    session.quit()
-
-def get_tkrs_snapshot(api,tickers):
-    snapshots_dict = api.get_snapshots(tickers)
-    snapshot_data = {stock: [snapshot.latest_trade.price, 
-                            snapshot.prev_daily_bar.close,
-                            snapshot.daily_bar.close,
-                            (snapshot.daily_bar.close/snapshot.prev_daily_bar.close)-1,
-                            ]
-                    for stock, snapshot in snapshots_dict.items() if snapshot and snapshot.daily_bar and snapshot.prev_daily_bar
-                    }
-    snapshot_columns=['price', 'prev_close', 'last_close', 'gain']
-    snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
-    return snapshot_df
-
-def get_market_snapshot(api):
-    assets_list = api.list_assets() # all stocks tradable on Aplaca
-    active_asset_list = [asset.symbol for asset in assets_list if asset.status=='active'] # list of active symbols
-    snapshots_dict = {}
-    CHUNK_SIZE = 1000 # There is a maximum length a URI can be => so get the snapshots in 'chunks'
-    for chunk_start in range(0, len(active_asset_list), CHUNK_SIZE):
-        chunk_end = chunk_start + CHUNK_SIZE
-        chunk = active_asset_list[chunk_start:chunk_end]
-        snapshots_chunk = api.get_snapshots(chunk)
-        snapshots_dict.update(snapshots_chunk)
-
-    snapshot_data = {stock: [snapshot.latest_trade.price, 
-                            snapshot.prev_daily_bar.close,
-                            snapshot.daily_bar.close,
-                            (snapshot.daily_bar.close/snapshot.prev_daily_bar.close)-1,
-                            ]
-                    for stock, snapshot in snapshots_dict.items() if snapshot and snapshot.daily_bar and snapshot.prev_daily_bar
-                    }
-
-    snapshot_columns=['price', 'prev_close', 'last_close', 'gain']
-    snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
-    return snapshot_df
-
-def get_open_orders_after_df(api, start_time):
-    CHUNK_SIZE = 500
-    all_orders = []
-    check_for_more_orders = True
-    while check_for_more_orders:
-        api_orders = api.list_orders(status='all', after=start_time.isoformat(), direction='asc', limit=CHUNK_SIZE, nested=False)
-        all_orders.extend(api_orders)
-        if len(api_orders) == CHUNK_SIZE: # Since length equals the CHUNK_SIZE there may be more orders
-            start_time = all_orders[-3].submitted_at   # Set the ending timestamp for the next chunk of orders
-                                                        # A hack to work around complex orders having the same submitted_at time
-                                                        # and avoid potentially missing one, is to get more than we need
-        else: # That was the final chunk so exit
-            check_for_more_orders = False
-    orders_df = pd.DataFrame([order._raw for order in all_orders])
-    orders_df.drop_duplicates('id', inplace=True)
-    open_orders_df = orders_df.query('status in ["new", "held"]') # Return only the 'open' orders (ie not filled, replaced, etc)
-    open_orders_df.set_index('symbol', inplace=True)
-    return open_orders_df
-
-def get_positions_df():
-    positions_list = api.list_positions()
-    positions_df = pd.DataFrame([position._raw for position in positions_list])
-    positions_df.set_index('symbol', inplace=True)
-    return positions_df
+    def _auth_brok(self):
+        broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_version="v2")
+        return broker_client
 
 
+    def get_allocated_capital(self, strategy):
+        sheet_id = '1jg-IXE4GcEpnT8BR7fUZKW7PzFF6eSN9OgGeGmQnU38'
+        sheet_name = 'Sheet1'
+        url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}'
+        df = pd.read_csv(url)
+        strategy_allocated_capital = df[df.Strategy_ID == strategy]['Allocated_Capital'].values[0]
+        return strategy_allocated_capital
 
-def get_all_trades(api):
-    count = 0
-    search = True
-    while search:
-        if count < 1:
-            data = api.get_activities() # get most recent activities
-            data = pd.DataFrame([activity._raw for activity in data])
-            split_id = data.id.iloc[-1] # get the last order id for pagination
-            trades = data
-        else:
-            data = api.get_activities(direction='desc', page_token=split_id)
-            data = pd.DataFrame([activity._raw for activity in data])
-            if data.empty:
-                search = False
-            else:
-                split_id = data.id.iloc[-1]
-                trades = trades.append(data)
-        count += 1
-    trades = trades[trades.order_status == 'filled']
-    trades = trades.reset_index(drop=True)
-    trades = trades.sort_index(ascending=False).reset_index(drop=True)
-    trades['transaction_time'] = pd.to_datetime(trades['transaction_time'], format="%Y-%m-%d")
-    return(trades)
 
-# Calculates overnight gain (last close to current price)
-def overnight_gain(api,stk):
-    snapshot_data = api.get_snapshot(stk)
+    def sent_alpaca_email(self, mail_subject, mail_content):
 
-    clock = api.get_clock()
-    current_time = clock.timestamp
-    current_date = clock.timestamp.normalize()
+        email_sent = False
+        message = MIMEMultipart() # setup the MIME
+        message['From'] = 'Alpaca Paper'
+        message['To'] = receiver_address
+        message['Subject'] = mail_subject   #The subject line
+        message.attach(MIMEText(mail_content, 'plain')) # body and the attachments for the mail
 
-    minute_bar_is_old = snapshot_data.minute_bar.timestamp < current_time - pd.Timedelta(15, 'minutes')
-    if minute_bar_is_old:
-        log.warning('minute data is more than 15 minutes old. timestamp. is: {}'.format(snapshot_data.minute_bar.timestamp))
+        #Create SMTP session for sending the mail
+        session = smtplib.SMTP('smtp.gmail.com', 587) # use gmail with port
+        session.starttls() # enable security
+        session.login(sender_address, sender_pass) # login with mail_id and password
+        text = message.as_string()
+        session.sendmail(sender_address, receiver_address, text)
+        session.quit()
+        email_sent = True
+        return email_sent
 
-    daily_bar_is_old = snapshot_data.daily_bar.timestamp < current_date
-    if daily_bar_is_old:
-        log.warning('daily data isnt current. timestamp. is: {}'.format(snapshot_data.daily_bar.timestamp))
 
-    # Calculate gain (even if old data)
-    price_current = snapshot_data.minute_bar.close
-    price_prev_close = snapshot_data.prev_daily_bar.close
+    def get_tkrs_snapshot_df(self,tickers):
+        stock_client = self._auth_hist()
+        snap = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=tickers, feed = DataFeed.SIP))
+        snapshot_data = {stock: [snapshot.latest_trade.price, 
+                                snapshot.previous_daily_bar.close,
+                                snapshot.daily_bar.close,
+                                (snapshot.daily_bar.close/snapshot.previous_daily_bar.close)-1,
+                                ]
+                        for stock, snapshot in snap.items() if snapshot and snapshot.daily_bar and snapshot.previous_daily_bar
+                        }
+        snapshot_columns=['price', 'prev_close', 'last_close', 'gain']
+        snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
+        return snapshot_df
 
-    gain_close_to_current = math.log(price_current / price_prev_close)
-    log.debug('overnight gain calc. current price: {}  prev close price: {}  gain: {}'.format(price_current, price_prev_close, gain_close_to_current ))
 
-    return gain_close_to_current
+    def get_market_snapshot_df(self):
+        trading_client = self._auth_trading()
+        stock_client = self._auth_hist()
+        assets = trading_client.get_all_assets(GetAssetsRequest(asset_class=AssetClass.US_EQUITY,status= AssetStatus.ACTIVE))
+        exclude_strings = ['Etf', 'ETF', 'Lp', 'L.P', 'Fund', 'Trust', 'Depositary', 'Depository', 'Note', 'Reit', 'REIT']
+        assets_in_scope = [asset for asset in assets
+                            if asset.exchange != 'OTC' # OTC stocks play by different rules than Exchange Traded stocks (often referred to as NMS). 
+                            and asset.shortable
+                            and asset.tradable
+                            and asset.marginable # if a stock is not marginable that means it cannot be used as collateral for margin. 
+                            and asset.fractionable # indirectly filters out a lot of small volatile stocks:  
+                            and asset.easy_to_borrow 
+                            and asset.maintenance_margin_requirement == 30
+                            and not (any(ex_string in asset.name for ex_string in exclude_strings))]
+        snapshots_dict = {}
+        CHUNK_SIZE = 1000 # There is a maximum length a URI can be => so get the snapshots in 'chunks'
+        for chunk_start in range(0, len(assets_in_scope), CHUNK_SIZE):
+            chunk_end = chunk_start + CHUNK_SIZE
+            chunk = assets_in_scope[chunk_start:chunk_end]
+            snapshots_chunk = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=chunk, feed = DataFeed.SIP))
+            snapshots_dict.update(snapshots_chunk)
 
-def daytrade_sell_check(api, symbol, DAYTRADE_PATTERN_PROTECTION=True):
-    today= datetime.date.today().isoformat()
-    activities= api.get_activities(after=today)
-    activities= pd.DataFrame([a._raw for a in activities])
-    if activities.size > 0:
-        not_active_today= symbol not in list(activities['symbol'])
-    else:
-        not_active_today= True
-    
-    if not DAYTRADE_PATTERN_PROTECTION:
-        return True
-    elif DAYTRADE_PATTERN_PROTECTION and not_active_today :
-        return True
-    else:
-        return False
-
-def time_to_market_close(api):
-    clock = api.get_clock()
-    closing = clock.next_close - clock.timestamp
-    return round(closing.total_seconds() / 60)
-
-def wait_for_market_open(api):
-	clock = api.get_clock()
-	if not clock.is_open:
-		time_to_open = clock.next_open - clock.timestamp
-		sleep_time = round(time_to_open.total_seconds())
-		sleep(sleep_time)
-	return clock
+        snapshot_data = {stock: [snapshot.latest_trade.price, 
+                                snapshot.previous_daily_bar.close,
+                                snapshot.daily_bar.close,
+                                (snapshot.daily_bar.close/snapshot.previous_daily_bar.close)-1,
+                                ]
+                        for stock, snapshot in snapshots_dict.items() if snapshot and snapshot.daily_bar and snapshot.previous_daily_bar
+                        }
+        snapshot_columns=['price', 'prev_close', 'last_close', 'gain']
+        snapshot_df = pd.DataFrame(snapshot_data.values(), snapshot_data.keys(), columns=snapshot_columns)
+        return snapshot_df
 
 

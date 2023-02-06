@@ -1,5 +1,7 @@
-alpaca-trade-api>=0.25
-ta
-sklearn
-twilio
+# new alpaca SDK
+alpaca-py
+# old alpaca SDK: alpaca-trade-api
 pandas
+twilio
+dash
+dash_bootstrap_components

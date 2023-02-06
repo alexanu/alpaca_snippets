@@ -3,7 +3,7 @@
 # Description:
 '''
 trades every day refreshing portfolio based on the EMA ranking
-low (price - EMA) vs price ratio indicates there is a big dip in a short time
+low [(price - EMA) vs price] ratio indicates there is a big dip in a short time
 '''
 
 import alpaca_trade_api as tradeapi
@@ -13,16 +13,14 @@ import pandas as pd
 import time
 import logging
 
-import fmpsdk # for fetching latest SP500 list
 from Alpaca_config import * # contains fmp key as well
-alpaca = tradeapi.REST(API_KEY_PAPER, API_SECRET_PAPER, API_BASE_URL_PAPER, 'v2')
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
 NY = 'America/New_York'
 
-Universe = pd.json_normalize(fmpsdk.sp500_constituent(apikey=fmp_key)).symbol.to_list()
+Universe = ...
 position_size=100
 max_positions=5
 

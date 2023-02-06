@@ -8,17 +8,17 @@ import time
 import datetime as dt
 import random
 
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus
-from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TrailingStopOrderRequest, GetPortfolioHistoryRequest
-from alpaca.data import StockHistoricalDataClient
+import alpaca
+
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, QueryOrderStatus, CorporateActionType, CorporateActionSubType
+from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TakeProfitRequest, TrailingStopOrderRequest, GetPortfolioHistoryRequest, GetCorporateAnnouncementsRequest
 from alpaca.data.requests import StockLatestQuoteRequest, StockTradesRequest, StockQuotesRequest, StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import Adjustment, DataFeed, Exchange
-from alpaca.broker.client import BrokerClient
-import alpaca
-alpaca.__version__
 
+from alpaca.trading.client import TradingClient
+from alpaca.data import StockHistoricalDataClient
+from alpaca.broker.client import BrokerClient
 trading_client = TradingClient(API_KEY_PAPER, API_SECRET_PAPER) # dir(trading_client)
 stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
 broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_version="v2")
@@ -54,6 +54,9 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
 
         # Portfolio history
+            account_id = trading_client.get_account().id
+            data_pf = broker_client.get_portfolio_history_for_account(account_id)
+
             data_pf = broker_client.get_portfolio_history_for_account(
                                         trading_client.get_account().id,
                                         GetPortfolioHistoryRequest(period='2W', # <number> + <unit>: D, W, M, A
@@ -80,7 +83,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         # Understanding orders: https://alpaca.markets/docs/trading-on-alpaca/orders/
         # Nice overview of different order types: https://alpaca.markets/learn/13-order-types-you-should-know-about/
         # From Feb 2022 Alpaca allows trading from 4am till 8pm ET (10am - 2am Munich Time)
-                    # Rules for submitting orders for extended hours: https://alpaca.markets/docs/trading-on-alpaca/orders/#extended-hours-trading
+                    # Rules for submitting orders for extended hours: https://alpaca.markets/docs/trading/orders/#extended-hours-trading
                     # extended_hours=True & type='limit' & time_in_force=TimeInForce.DAY:
                             # A limit orders with a limit price that significantly exceeds the current market price will be rejected
                             # Any other order types, including market orders, will be rejected
@@ -91,7 +94,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             #       submitted after 7:00pm ET will be queued and eligible for execution at the time of the next market open
 
         dir(TimeInForce)
-        # Time in force: https://alpaca.markets/docs/trading-on-alpaca/orders/#time-in-force
+        # Time in force: https://alpaca.markets/docs/trading/orders/#time-in-force
             '''
             gtc - good-till-cancelled
             day - eligible for execution only on the day it is live (9:30am - 4:00pm ET)
@@ -102,12 +105,12 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             '''
 
         strategy_name = "Break_out_10min"
-        coid = strategy_name + "_" + str(int(time.mktime(alpaca.get_clock().timestamp.timetuple())))
+        coid = strategy_name + "_" + str(int(time.mktime(trading_client.get_clock().timestamp.timetuple())))
         ticker = 'SPY'
         ticker = random.choice(Universes.Spiders)
         limit_buy = 0.99 # how limit price should be different from current ask
         stop_loss = trail_sl = 5 # in %, easy stop-loss, I should use ATR() like in zorro probably
-        
+        take_profit = 20 # in %        
         latest_quote = stock_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=[ticker]))
         limit_price_target = round(latest_quote[ticker].ask_price*limit_buy,0)
         quantity = int(float(account.buying_power)//latest_quote[ticker].ask_price)
@@ -125,7 +128,20 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             market_order = trading_client.submit_order(order_data=market_order_data)
             print(f"Buying {quantity} of {ticker}. Buing power left is {float(account.buying_power)}")
 
-        # Trailing order
+        # bracket order
+            market_order = MarketOrderRequest(
+                symbol = symbol, 
+                qty = quantity, 
+                side = OrderSide.BUY, 
+                time_in_force = TimeInForce.GTC, 
+                take_profit = TakeProfitRequest(limit_price=limit_price_target*(1+take_profit/100), side = OrderSide.SELL), 
+                stop_loss= StopLossRequest(stop_price=limit_price_target*(1-take_profit/100), side = OrderSide.SELL), 
+                order_class = OrderClass.BRACKET
+                )
+
+
+
+        # Trailing order: https://alpaca.markets/docs/trading/orders/#trailing-stop-orders
             trailing_sl_order_data = TrailingStopOrderRequest(
                 symbol=ticker,
                 qty=3,
@@ -137,37 +153,39 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             trailing_order = trading_client.submit_order(order_data=trailing_sl_order_data)
 
         # Limit order
-            limit_order_data = LimitOrderRequest(symbol=ticker,
-                                                limit_price=limit_price_target,
-                                                qty=1,
-                                                side=OrderSide.BUY,
-                                                extended_hours = True,
-                                                client_order_id = coid,
-                                                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss)),
-                                                time_in_force=TimeInForce.DAY) # dir(TimeInForce), extended hours order must be DAY limit orders
+            limit_order_data = LimitOrderRequest(
+                symbol=ticker,
+                limit_price=limit_price_target,
+                qty=1,
+                side=OrderSide.BUY,
+                extended_hours = True,
+                client_order_id = coid,
+                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss)),
+                time_in_force=TimeInForce.DAY) # dir(TimeInForce), extended hours order must be DAY limit orders
             limit_order = trading_client.submit_order(order_data=limit_order_data)
 
 
+
+        # close position
         trading_client.close_position('SPY') 
         trading_client.close_all_positions(cancel_orders=True) # closes all position AND also cancels all open orders
 
         # Take profit
             positions = trading_client.get_all_positions()
             for position in positions:
-                profit = position.unrealized_pl
-                percentChange = (profit/position.cost_basis) * 100
+                profit = float(position.unrealized_pl)
+                percentChange = (profit/float(position.cost_basis)) * 100
                 if (percentChange > 5):
-                    print("Selling {} shares of {}".format(position.qty,position.symbol))
+                    print(f"Selling {position.qty} shares of {position.symbol}")
                     trading_client.submit_order(MarketOrderRequest(symbol=position.symbol,qty=position.qty,side=OrderSide.SELL,client_order_id = coid,time_in_force=TimeInForce.OPG))
-
-
             
-
+        # cancel orders
         trading_client.cancel_orders() 
-        trading_client.cancel_order_by_id() 
+        trading_client.cancel_order_by_id()
+
+
+
         trading_client.replace_order_by_id()
-
-
 
             '''
             How to switch from long to short? 
@@ -179,8 +197,9 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
 # Order list, executed trades, positions
 
-        dir(OrderStatus) # 'ACCEPTED', 'ACCEPTED_FOR_BIDDING', 'CALCULATED', 'CANCELED', 'DONE_FOR_DAY', 'EXPIRED', 'REJECTED', 'REPLACED',
-                        # 'FILLED', 'NEW', 'PARTIALLY_FILLED', 'PENDING_CANCEL', 'PENDING_NEW', 'PENDING_REPLACE',  'STOPPED', 'SUSPENDED'
+        dir(OrderStatus) # 'ACCEPTED', 'ACCEPTED_FOR_BIDDING', 'CALCULATED', 'CANCELED', 
+                        # 'DONE_FOR_DAY', 'EXPIRED', 'REJECTED', 'REPLACED', 'FILLED', 'NEW', 'PARTIALLY_FILLED', 
+                        # 'PENDING_CANCEL', 'PENDING_NEW', 'PENDING_REPLACE',  'STOPPED', 'SUSPENDED'
             # full list of statuses: https://alpaca.markets/docs/trading-on-alpaca/orders/#order-lifecycle
                 # Updates on orders states at Alpaca will be sent over the streaming interface
 
@@ -190,24 +209,26 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S').isoformat() # isoformat also works
 
     # extract all orders to df
-        request_params = GetOrdersRequest(status='all', # only 'open', 'closed', 'all'. Not the same as OrderStatus
+        request_params = GetOrdersRequest(status=QueryOrderStatus.OPEN, # Not the same as OrderStatus
                                         after = date_filter,
-                                        side=OrderSide.BUY)
+                                        # side=OrderSide.BUY, # optional
+                                        # symbols = ['SPY','QQQ'], # optional
+                                        )
         orders = trading_client.get_orders(filter=request_params)
         orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders),axis=1).T
         columns_to_convert = ['created_at','updated_at','submitted_at','filled_at','expired_at','canceled_at','failed_at','replaced_at']
         for column in columns_to_convert:
             try:
                 orders_df[column] = orders_df[column].dt.ceil(freq='s').dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
-                                                    # round till seconds
-                                                                        # convert from UTC to local time 
-                                                                                                        # remove time zone
+                                                    # ro              # convert from UTC to local time    # remove time zone
             except: # this we need as empty columns could give error
                 pass
         orders_df.to_excel('orders.xlsx')
 
     # filter by client id
+        orders = trading_client.get_orders()
         search_string = 'esting'
+        filtered_orders = [order for order in orders if search_string in order.client_order_id]
         filtered_orders_df = pd.concat((pd.DataFrame(order).set_index(0) for order in orders if search_string in order.client_order_id),axis=1).T
 
         # So these 2 below are not really needed. Or maybe to check the Order Status of a recently sent order, which ID is still in variable
@@ -220,7 +241,22 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
     # current positions
         positions = trading_client.get_all_positions()
+        positions =[]
+        if positions:
+            print("hi")
         positions_symbols_set = {p.symbol for p in positions}
+        [print(f"{p.symbol} with profit of {p.unrealized_pl}",end="; ") for p in positions]
+
+
+        stop_loss = -0.05
+        positions_symbols_to_close = [p.symbol for p in positions if float(p.unrealized_plpc)<stop_loss]
+
+        symbol = 'SPY'
+        positions_dict = {position.symbol: position.qty for position in positions}
+        if symbol in positions_dict:
+            print('Yes')
+
+
 
         try:
             position = trading_client.get_open_position('XLF').qty
@@ -233,6 +269,17 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         positions_df = pd.concat((pd.DataFrame(position).set_index(0) for position in positions),axis=1)
         positions_df = positions_df.T.apply(pd.to_numeric, errors='ignore').T # convert strings to numeric
         positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']] = positions_df[['unrealized_plpc','unrealized_intraday_plpc','change_today']].applymap("{0:.2f}".format)
+
+
+        positions = trading_client.get_all_positions() 
+        positions_list = []
+        for position in positions:
+            position_dict = dict(position)
+            positions_list.append(dict(position))
+
+        positions_df = pd.DataFrame(positions_list)
+        as_numeric_columns = ['avg_entry_price', 'qty', 'market_value', 'cost_basis', 'unrealized_pl', 'unrealized_plpc', 'unrealized_intraday_pl', 'unrealized_intraday_plpc', 'current_price', 'lastday_price', 'change_today']
+        positions_df[as_numeric_columns] = positions_df[as_numeric_columns].astype(float).round(3)
 
         
 # Assets
@@ -284,23 +331,22 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 # Clock & Calendar
 
     alpaca_calendar = trading_client.get_calendar()
+    alpaca_calendar = trading_client.get_calendar(GetCalendarRequest(start="2021-02-08", end="2021-02-18"))
     len(alpaca_calendar)
+    alpaca_calendar[0]
+
 
     now = pd.Timestamp.today() + pd.offsets.Day(-1)
     MonthEnd = (now + pd.offsets.BusinessMonthEnd(normalize=True)).strftime("%Y-%m-%d")
     trading_till_moe = trading_client.get_calendar(GetCalendarRequest(start=now.strftime("%Y-%m-%d"), end=MonthEnd))
     len(trading_till_moe)
-    pd.Timestamp(trading_till_moe[0].close).strftime("%b %d, %H:%M")
-    (dt.datetime.now()- trading_till_moe[0].close).total_seconds() // 3600
-    pd.Timestamp.now(tz="EST") - trading_till_moe[0].close
-    trading_client.get_calendar(GetCalendarRequest(start="2021-02-08", end="2021-02-18"))
-    alpaca_calendar[0]
 
-    dt.tz
+    weird_close_times = [day for day in trading_till_moe if day.close.hour != 16] # check if in the upcoming days exchange closes earlier than usual
+
+    pd.Timestamp(trading_till_moe[0].close).strftime("%b %d, %H:%M") # Close time ET today 
     pd.Timestamp(trading_till_moe[0].close).tz_localize('US/Eastern').tz_convert('UTC')
-    trading_till_moe[0].close.dt.tz_localize('EST').tz_convert('CET')
-    import pytz
-    trading_till_moe[0].close.replace(tzinfo=pytz.timezone('US/Eastern')).astimezone(tz="")
+
+    clock = trading_client.get_clock()
 
     print(f'Today is {pd.Timestamp.today().day_name()}, {pd.Timestamp.now(tz="CET").tz_localize(None).strftime("%b %d, %H:%M") } in Munich, which is {pd.Timestamp.now(tz="EST").tz_localize(None).strftime("%H:%M")} in New York')
     time_to_open = (clock.next_open - clock.timestamp).total_seconds()//3600
@@ -308,33 +354,60 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
     time_to_close = (clock.timestamp - clock.next_close).total_seconds()//3600
     print(f'Market is currently open. Will close in {time_to_close} hours')
 
-
-
-
-
-    clock = trading_client.get_clock()
-
+    # if market not open, exit
     if not clock.is_open:
-        time_to_open = round((clock.next_open - clock.timestamp).total_seconds()/3600,1)
+        time_to_open = (clock.next_open - clock.timestamp).total_seconds()//3600
+        print(f'Market is currently closed. Will open in {time_to_open} hours at {clock.next_open.ctime()}')
+        exit()
     else:
-        time_to_close = (clock.timestamp - clock.next_close).total_seconds()//3600
+        time_to_close = (clock.next_close - clock.timestamp).total_seconds()//60
 
 
-
-    closing = clock.next_close - clock.timestamp
-    if round(closing.total_seconds() / 60) > 120:
-        if not clock.is_open:
-            time_to_open = (clock.next_open - clock.timestamp).total_seconds()//3600
-            print(f"Market is closed now going to sleep for ~{time_to_open.total_seconds()//3600} hours till {clock.next_open.ctime()}")
-            sleep(round(time_to_open))
-
+    clock.timestamp.strftime('%H:%M') > '15:00'
+    # if it's close to market close time, then ...
+    if (clock.timestamp.strftime('%H:%M') > '9:35' or clock.timestamp.strftime('%H:%M') < '15:49'):
 
 
 # Corporate announcements
 
-    trading_client.get_corporate_annoucements() # error
-    trading_client.get_corporate_announcment_by_id() # error
+    trading_client.get_corporate_announcements(
+        GetCorporateAnnouncementsRequest(
+            ca_types=['MERGER'],
+            since = '2022-11-11', # 90 days
+            until = '2022-12-11', # 90 days
+            # date_type = '', # declaration_date, ex_date, record_date, payable_date
+        )) # error
 
+    dir(CorporateActionType)
+    '''
+    Details: https://alpaca.markets/docs/api-references/trading-api/corporate-actions-announcements/
+
+    DIVIDEND = "dividend"
+    CASH = "cash"
+    STOCK = "stock"
+
+    MERGER = "merger"
+    MERGER_UPDATE = "merger_update"
+    MERGER_COMPLETION = "merger_completion"
+
+    SPINOFF = "spinoff"
+
+    SPLIT = "split"
+    STOCK_SPLIT = "stock_split"
+    UNIT_SPLIT = "unit_split"
+    REVERSE_SPLIT = "reverse_split"
+
+    RECAPITALIZATION = "recapitalization"
+    '''
+
+    ca_types: List[CorporateActionType]
+    since: date
+    until: date
+    symbol: Optional[str]
+    cusip: Optional[str]
+    date_type: Optional[CorporateActionDateType]
+
+    trading_client.get_corporate_announcement_by_id() # error
 
 
 # Streaming Trade Updates
@@ -346,9 +419,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
     trading_stream.run()
 
 
-
 # Market data stocks ----------------------------------------------------------------------------------------------------------------
-
 
         # Snapshot
             scope_tickers = Universes.TOP10_US_SECTOR
@@ -388,6 +459,19 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
                 hist_bars.index = hist_bars.index.tz_convert('America/New_York').tz_localize(None)
                                                     # Convert to market time for easier reading
                                                                                 # remove +00:00 from datetime
+
+
+                today = trading_client.get_clock().timestamp
+                previous_day = today - pd.Timedelta('1D')
+                previous_day_10 = today - pd.Timedelta('10D')
+                stock = 'SPY'
+                bars_request_params = StockBarsRequest(symbol_or_symbols=stock, start = previous_day_10, end = previous_day, timeframe=TimeFrame.Day, adjustment= Adjustment.RAW,feed = DataFeed.SIP)
+                bar_data = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) # drop level is needed as 1st it appears with multiindex with symbol
+
+                bars_request_params = StockBarsRequest(symbol_or_symbols=stock, limit = 10, end = previous_day, timeframe=TimeFrame.Day, adjustment= Adjustment.RAW,feed = DataFeed.SIP)
+                bar_data = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) # drop level is needed as 1st it appears with multiindex with symbol
+
+
 
             # for many symbols
                 bars_request_params = StockBarsRequest(
@@ -478,6 +562,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
                 rank()
 
 # Latest Bar
+
 latest_bars = stock_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=["SPY", "GLD", "TLT"], feed = DataFeed.SIP))
 latest_bars['SPY'].open # ask_exchange, ask_price, ask_size, bid_exchange, bid_price, bid_size, conditions, tape, timestamp
 pd.DataFrame(latest_bars) # How to put this to DF?
@@ -535,21 +620,21 @@ quotes = stock_client.get_stock_quotes(quotes_request_params).df
 
 
 # Crypto data -------------------------------------------------------------------------------------------------------------------------
-from alpaca.data import CryptoHistoricalDataClient, StockHistoricalDataClient
-from alpaca.data.historical import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.requests import GetAssetsRequest
-from alpaca.trading.enums import AssetClass
+    from alpaca.data import CryptoHistoricalDataClient, StockHistoricalDataClient
+    from alpaca.data.historical import CryptoHistoricalDataClient
+    from alpaca.data.requests import CryptoBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.trading.requests import GetAssetsRequest
+    from alpaca.trading.enums import AssetClass
 
 
-client = CryptoHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER) # no keys required for crypto data
-request_params = CryptoBarsRequest(symbol_or_symbols=["BTC/USD", "ETH/USD"],timeframe=TimeFrame.Day,start="2022-07-01")
-bars = client.get_crypto_bars(request_params).df
+    client = CryptoHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER) # no keys required for crypto data
+    request_params = CryptoBarsRequest(symbol_or_symbols=["BTC/USD", "ETH/USD"],timeframe=TimeFrame.Day,start="2022-07-01")
+    bars = client.get_crypto_bars(request_params).df
 
-from alpaca.data import CryptoDataStream
-crypto_stream = CryptoDataStream(API_KEY_PAPER,API_SECRET_PAPER) # keys are required for live data
+    from alpaca.data import CryptoDataStream
+    crypto_stream = CryptoDataStream(API_KEY_PAPER,API_SECRET_PAPER) # keys are required for live data
 
-# search for crypto assets
-assets = trading_client.get_all_assets(GetAssetsRequest(asset_class=AssetClass.CRYPTO))
+    # search for crypto assets
+    assets = trading_client.get_all_assets(GetAssetsRequest(asset_class=AssetClass.CRYPTO))
 
