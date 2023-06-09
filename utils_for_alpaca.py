@@ -34,7 +34,7 @@ class Alpaca:
         return broker_client
 
 
-    def get_allocated_capital(self, strategy):
+    def read_strategy_params(self, strategy):
         sheet_id = '1jg-IXE4GcEpnT8BR7fUZKW7PzFF6eSN9OgGeGmQnU38'
         sheet_name = 'Sheet1'
         url = f'https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}'

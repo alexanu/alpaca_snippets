@@ -9,12 +9,14 @@ import datetime as dt
 import random
 
 import alpaca
+alpaca.__version__
 
-from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, QueryOrderStatus, CorporateActionType, CorporateActionSubType
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, OrderType, QueryOrderStatus, CorporateActionType, CorporateActionSubType
 from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TakeProfitRequest, TrailingStopOrderRequest, GetPortfolioHistoryRequest, GetCorporateAnnouncementsRequest
 from alpaca.data.requests import StockLatestQuoteRequest, StockTradesRequest, StockQuotesRequest, StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import Adjustment, DataFeed, Exchange
+
 
 from alpaca.trading.client import TradingClient
 from alpaca.data import StockHistoricalDataClient
@@ -29,13 +31,14 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
         account = trading_client.get_account()
         dir(account)
+        account.__pretty__
         float(account.equity)
         float(account.last_equity) # balance at the last market close
         # Check our current balance vs. our balance at the last market close
         balance_change = round(float(account.equity) - float(account.last_equity),2) 
 
         
-        account.portfolio_value
+        float(account.portfolio_value)
         account.buying_power # buying power is 2x equity if 2000 < equity < 25000, and 4x equity if equity > 25000
         account.regt_buying_power # regulation T buying power = (2 x equity) - (long_position_value - short_position_value)
         account.daytrading_buying_power
@@ -84,10 +87,9 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         # Nice overview of different order types: https://alpaca.markets/learn/13-order-types-you-should-know-about/
         # From Feb 2022 Alpaca allows trading from 4am till 8pm ET (10am - 2am Munich Time)
                     # Rules for submitting orders for extended hours: https://alpaca.markets/docs/trading/orders/#extended-hours-trading
-                    # extended_hours=True & type='limit' & time_in_force=TimeInForce.DAY:
+                    # extended hours order must be DAY limit orders: extended_hours=True & type='limit' & time_in_force=TimeInForce.DAY
                             # A limit orders with a limit price that significantly exceeds the current market price will be rejected
                             # Any other order types, including market orders, will be rejected
-                            # extended hours order must be DAY limit orders
                     # Your extended hour order will be processed and filled immediately.
             # Orders not eligible for extended hours 
             #       submitted between 4:00pm - 7:00pm ET will be rejected.
@@ -119,7 +121,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         # Market order
             market_order_data = MarketOrderRequest(
                 symbol=ticker,
-                qty=quantity,
+                qty=2,
                 side=OrderSide.BUY, # dir(OrderSide)
                 # extended_hours = True, # not possible for market order
                 client_order_id = coid,
@@ -129,15 +131,17 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             print(f"Buying {quantity} of {ticker}. Buing power left is {float(account.buying_power)}")
 
         # bracket order
-            market_order = MarketOrderRequest(
-                symbol = symbol, 
-                qty = quantity, 
+            bracket_market_order_data = MarketOrderRequest(
+                symbol = ticker, 
+                qty = 2, 
                 side = OrderSide.BUY, 
                 time_in_force = TimeInForce.GTC, 
                 take_profit = TakeProfitRequest(limit_price=limit_price_target*(1+take_profit/100), side = OrderSide.SELL), 
                 stop_loss= StopLossRequest(stop_price=limit_price_target*(1-take_profit/100), side = OrderSide.SELL), 
-                order_class = OrderClass.BRACKET
+                # order_class = OrderType..BRACKET
                 )
+            market_order = trading_client.submit_order(order_data=bracket_market_order_data)
+
 
 
 
@@ -147,7 +151,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
                 qty=3,
                 side=OrderSide.BUY, # dir(OrderSide)
                 # extended_hours = True, # not possible for traling order
-                client_order_id = 'testing trailing order 1',
+                client_order_id = 'testing trailing order 2',
                 trail_percent=trail_sl,
                 time_in_force=TimeInForce.GTC) # dir(TimeInForce)
             trailing_order = trading_client.submit_order(order_data=trailing_sl_order_data)
@@ -160,14 +164,14 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
                 side=OrderSide.BUY,
                 extended_hours = True,
                 client_order_id = coid,
-                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss)),
+                stop_loss = StopLossRequest(stop_price=limit_price_target*(1-stop_loss/100)),
                 time_in_force=TimeInForce.DAY) # dir(TimeInForce), extended hours order must be DAY limit orders
             limit_order = trading_client.submit_order(order_data=limit_order_data)
 
 
 
         # close position
-        trading_client.close_position('SPY') 
+        trading_client.close_position('XLE') 
         trading_client.close_all_positions(cancel_orders=True) # closes all position AND also cancels all open orders
 
         # Take profit
@@ -209,8 +213,8 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S').isoformat() # isoformat also works
 
     # extract all orders to df
-        request_params = GetOrdersRequest(status=QueryOrderStatus.OPEN, # Not the same as OrderStatus
-                                        after = date_filter,
+        request_params = GetOrdersRequest(status=QueryOrderStatus.ALL, # Not the same as OrderStatus
+                                          after = date_filter,
                                         # side=OrderSide.BUY, # optional
                                         # symbols = ['SPY','QQQ'], # optional
                                         )
@@ -245,7 +249,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
         if positions:
             print("hi")
         positions_symbols_set = {p.symbol for p in positions}
-        [print(f"{p.symbol} with profit of {p.unrealized_pl}",end="; ") for p in positions]
+        [print(f"{p.symbol} with profit of {p.unrealized_pl}",end=";\n") for p in positions]
 
 
         stop_loss = -0.05
@@ -278,7 +282,8 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
             positions_list.append(dict(position))
 
         positions_df = pd.DataFrame(positions_list)
-        as_numeric_columns = ['avg_entry_price', 'qty', 'market_value', 'cost_basis', 'unrealized_pl', 'unrealized_plpc', 'unrealized_intraday_pl', 'unrealized_intraday_plpc', 'current_price', 'lastday_price', 'change_today']
+        needed_cols = ['symbol','qty','market_value', 'unrealized_plpc']
+        positions_df = positions_df[needed_cols]
         positions_df[as_numeric_columns] = positions_df[as_numeric_columns].astype(float).round(3)
 
         
@@ -372,7 +377,7 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
     trading_client.get_corporate_announcements(
         GetCorporateAnnouncementsRequest(
-            ca_types=['MERGER'],
+            ca_types=['merger'],
             since = '2022-11-11', # 90 days
             until = '2022-12-11', # 90 days
             # date_type = '', # declaration_date, ex_date, record_date, payable_date
@@ -443,6 +448,22 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
         # Bars
 
+            # Daily data
+                today = trading_client.get_clock().timestamp
+                previous_day = today - pd.Timedelta('1D')
+                previous_day_40 = today - pd.Timedelta('40D')
+                bars_request_params = StockBarsRequest(symbol_or_symbols=['AAPL','F','NVDA'], 
+                                                       start = previous_day_40, end = previous_day, 
+                                                       timeframe=TimeFrame.Day, 
+                                                       adjustment= Adjustment.ALL,
+                                                       feed = DataFeed.SIP)
+                daily_df = stock_client.get_stock_bars(bars_request_params).df
+                daily_df = daily_df.reset_index()
+                daily_df.timestamp = daily_df.timestamp.dt.date
+
+
+
+
             # for 1 symbol
                 bars_request_params = StockBarsRequest(
                     symbol_or_symbols=['SPY'], 
@@ -470,7 +491,6 @@ broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_ve
 
                 bars_request_params = StockBarsRequest(symbol_or_symbols=stock, limit = 10, end = previous_day, timeframe=TimeFrame.Day, adjustment= Adjustment.RAW,feed = DataFeed.SIP)
                 bar_data = stock_client.get_stock_bars(bars_request_params).df.droplevel(level=0) # drop level is needed as 1st it appears with multiindex with symbol
-
 
 
             # for many symbols
