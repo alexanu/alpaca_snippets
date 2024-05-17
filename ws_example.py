@@ -1,5 +1,9 @@
 # https://alpaca.markets/docs/api-documentation/api-v2/market-data/streaming/
 
+# get some fake data to make sure your code works, even when the market is closed
+# wss://stream.data.alpaca.markets/v2/test
+
+
 import alpaca_trade_api
 
 from alpaca_trade_api.stream import Stream

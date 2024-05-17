@@ -1,7 +1,4 @@
-# new alpaca SDK
 alpaca-py
-# old alpaca SDK: alpaca-trade-api
 pandas
 twilio
-dash
-dash_bootstrap_components
+PyGithub

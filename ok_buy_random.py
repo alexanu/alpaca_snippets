@@ -57,9 +57,13 @@ def buy_position(ticker):
             client_order_id = coid,
             stop_loss = StopLossRequest(stop_price=latest_ask_price*(1-stop_loss/100)),
             time_in_force=TimeInForce.GTC) # dir(TimeInForce)
-        inform(f"Strategy {strategy_name} is buying {quantity_to_buy} of {ticker} at market")
-        time.sleep(5)
-        return trading_client.submit_order(order_data=market_order_data)
+        my_order = trading_client.submit_order(market_order_data)
+        status = None
+        while status != 'filled':
+            my_order = trading_client.get_order_by_id(my_order.get('id'))
+            status = my_order.get('status')
+        message = f"Strategy {strategy_name} bought {quantity_to_buy} of {ticker} at market"
+        return message
     except Exception as _e:
         logging.error(_e)
         return None

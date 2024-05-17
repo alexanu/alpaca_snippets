@@ -17,57 +17,13 @@ mail_subject = 'Testing Followed Stocks 5-min'
 
 def pairs_trading_algo(self):
     
-    account = alpaca.get_account()
-    
     days = 1000 # working days
-    today = dt.datetime.now().strftime("%Y-%m-%d")
-    n_days_ago = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d")
-
     stock1 = 'ADBE'
     stock2 = 'AAPL'
     stock1_barset = alpaca.get_bars(stock1, TimeFrame.Day,n_days_ago,today,adjustment='raw').df
     stock2_barset = alpaca.get_bars(stock2, TimeFrame.Day,n_days_ago,today,adjustment='raw').df
-    historical = stock1_barset['close'].join(stock2_barset['close'], how='outer')
-    #Grab stock1 data and put in to a array
-    data_1 = []
-    times_1 = []
-    for i in range(days):
-        stock1_close = stock1_bars[i].c
-        stock1_time = stock1_bars[i].t
-        data_1.append(stock1_close)
-        times_1.append(stock1_time)
-    #Grab stock2 data and put in to an array
-    data_2 = []
-    times_2 = []
-    for i in range(days):
-        stock2_close = stock2_bars[i].c
-        stock2_time = stock1_bars[i].t
-        data_2.append(stock2_close)
-        times_2.append(stock2_time)
-    #Putting them together
-    hist_close = pd.DataFrame(data_1, columns=[stock1])
-    hist_close[stock2] = data_2
-    #Current Spread between the two stocks
-    stock1_curr = data_1[days-1]
-    stock2_curr = data_2[days-1]
-    spread_curr = (stock1_curr-stock2_curr)
-    #Moving Average of the two stocks
-    move_avg_days = 5
-    #Moving averge for stock1
-    stock1_last = []
-    for i in range(move_avg_days):
-        stock1_last.append(data_1[(days-1)-i])
-
-    stock1_hist = pd.DataFrame(stock1_last)
-
     stock1_mavg = stock1_hist.mean()
-    #Moving average for stock2
-    stock2_last = []
-    for i in range(move_avg_days):
-        stock2_last.append(data_2[(days-1)-i])
-    stock2_hist = pd.DataFrame(stock2_last)
     stock2_mavg = stock2_hist.mean()
-    #Sread_avg
     spread_avg = min(stock1_mavg - stock2_mavg)
     #Spread_factor
     spreadFactor = .01

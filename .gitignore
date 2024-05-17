@@ -1,5 +1,7 @@
 Alpaca_config.txt
 Alpaca_config.py
+azure_config_small.py
+real_account_plays.py
 *.docx
 *.xlsx
 *.csv
