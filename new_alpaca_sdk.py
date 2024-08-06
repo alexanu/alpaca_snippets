@@ -25,8 +25,8 @@ from alpaca.data import StockHistoricalDataClient
 from alpaca.broker.client import BrokerClient
 
 
-API_KEY_PAPER = os.environ['API_KEY_PAPER']
-API_SECRET_PAPER = os.environ['API_SECRET_PAPER']
+API_KEY_PAPER = os.environ['ALPACA_API_KEY_PAPER']
+API_SECRET_PAPER = os.environ['ALPACA_API_SECRET_PAPER']
 
 stock_client = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER)
 broker_client = BrokerClient(API_KEY_PAPER,API_SECRET_PAPER,sandbox=False,api_version="v2")
@@ -35,8 +35,6 @@ trading_client = TradingClient(API_KEY_PAPER, API_SECRET_PAPER) # dir(trading_cl
 # to more easily convert the portfolio to a dataframe, instantiate the TradingClient with raw_data=True
 stock_client_df = StockHistoricalDataClient(API_KEY_PAPER,API_SECRET_PAPER, raw_data=True)
 trading_client_df = TradingClient(API_KEY_PAPER, API_SECRET_PAPER, paper=True, raw_data=True)
-
-
 
 
 # Account information
@@ -316,22 +314,23 @@ trading_client_df = TradingClient(API_KEY_PAPER, API_SECRET_PAPER, paper=True, r
                 # Updates on orders states at Alpaca will be sent over the streaming interface
 
         date_filter = (pd.Timestamp.now()- pd.Timedelta(90, "days")).floor(freq='S') # orders for last 30 days
-        date_filter = (pd.Timestamp.now()- pd.Timedelta(7, "hours")).floor(freq='S') # orders for last 30 days
+        date_filter = (pd.Timestamp.now()- pd.Timedelta(48, "hours")).floor(freq='S') # orders for last 30 days
         date_filter = (pd.Timestamp.now()- pd.Timedelta(5, "minutes")).floor(freq='S'), # orders for last 5 minutes
         date_filter = (pd.Timestamp.now()- pd.Timedelta(30, "days")).floor(freq='S').isoformat() # isoformat also works
 
 
-        request_params = GetOrdersRequest(status=QueryOrderStatus.CLOSED, # Not the same as OrderStatus
+        request_params = GetOrdersRequest(
+                                        status=[QueryOrderStatus.CLOSED,QueryOrderStatus.OPEN], # Not the same as OrderStatus
                                         # status=QueryOrderStatus.OPEN, # Not the same as OrderStatus
                                         after = date_filter,
                                         # side=OrderSide.BUY, # optional
                                         # symbols = ['SPY','QQQ'], # optional
                                         )
-        orders = trading_client.get_orders(filter=request_params)
+        orders2 = trading_client.get_orders(filter=request_params)
 
 
         orders_dicts = []
-        for entry in orders:
+        for entry in orders2:
             print(entry.client_order_id)
             entry_dict = {}  # Create a new dictionary for each entry
             for attribute, value in vars(entry).items():
@@ -341,7 +340,7 @@ trading_client_df = TradingClient(API_KEY_PAPER, API_SECRET_PAPER, paper=True, r
         for column in df.columns:
             if pd.api.types.is_datetime64tz_dtype(df[column]):
                 df[column] = df[column].dt.tz_localize(None)
-        df.to_excel('orders3.xlsx')
+        df.to_excel('orders4.xlsx')
         df.columns
 
         df[['filled_at','symbol','filled_qty','order_type','side']]
@@ -745,6 +744,21 @@ trading_client_df = TradingClient(API_KEY_PAPER, API_SECRET_PAPER, paper=True, r
 # Market data stocks ----------------------------------------------------------------------------------------------------------------
 
         # Snapshot
+ 
+            tickers = ['SPY','NVDA','F','GME']
+            tickers_good = []
+            snap_spy = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=tickers, feed = DataFeed.SIP))
+            
+            for stock in snap_spy.keys():
+                if snap_spy[stock].daily_bar.close/snap_spy[stock].daily_bar.open >1:
+                    tickers_good.append(stock)
+
+                print(f'{stock}:{snap_spy[stock].daily_bar.close/snap_spy[stock].daily_bar.open}')
+            snap_spy['SPY'].daily_bar.close/snap_spy['SPY'].daily_bar.open
+
+
+
+
             scope_tickers = Universes.TOP10_US_SECTOR
             snap = stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=scope_tickers, feed = DataFeed.SIP))
             snapshot_data = {stock: [snapshot.latest_trade.price, 
