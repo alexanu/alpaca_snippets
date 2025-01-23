@@ -21,8 +21,8 @@ from email.mime.text import MIMEText
 from twilio.rest import Client
 
 
-from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, QueryOrderStatus, OrderClass, OrderType
-from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TakeProfitRequest, TrailingStopOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus, AssetExchange, OrderStatus, QueryOrderStatus, OrderClass, OrderType, PositionIntent
+from alpaca.trading.requests import GetCalendarRequest, GetAssetsRequest, GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopLossRequest, TakeProfitRequest, TrailingStopOrderRequest, StopOrderRequest, StopLimitOrderRequest
 from alpaca.data.requests import StockLatestQuoteRequest, StockTradesRequest, StockQuotesRequest, StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import Adjustment, DataFeed, Exchange
@@ -46,7 +46,7 @@ smtp_handler.setLevel(logging.ERROR)  # Messages with level ERROR and above (inc
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)  # Messages with level INFO and above (including WARNING, ERROR, CRITICAL) will be output to the console
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s - [%(filename)s:%(lineno)d]')
 console_handler.setFormatter(formatter)
 
 logger = logging.getLogger()
@@ -65,10 +65,8 @@ def num_of_positions_ok(key, secret):
     return max_positions_allowed > len(positions)
 
 
-
-
 def _write_df_to_github(repo, file_path, df, sha=None, commit_message="Updated CSV with new data"):
-    csv_modified = df.to_csv(index=False)
+    csv_modified = df.to_csv(sep=';', index=False)
     try:
         if sha:
             # Update the existing file
@@ -95,7 +93,6 @@ def _read_csv_from_github(repo, file_path):
         return pd.DataFrame(), None
     except GithubException as e:
         raise RuntimeError(f"Failed to read the file {file_path} from GitHub: {str(e)}")
-
 
 
 def _read_strategy_config(strategy):
@@ -131,6 +128,54 @@ def create_dict_from_dataframe(df, value_column):
     return df.set_index('symbol')[value_column].to_dict()
 
 
+def compare_dataframes(current_df, new_df, volume_threshold=0.1, trade_count_threshold=0.1):
+    '''I use the function for now only in one strategy for updating once-a-month very specfic csv file on github. idk how to do it more elegant'''
+    try:
+        # Ensure both dataframes have the necessary columns
+        required_columns = {'symbol', 'volume', 'trade_count'}
+        
+        if not required_columns.issubset(current_df.columns) or not required_columns.issubset(new_df.columns):
+            raise ValueError("Both dataframes must contain 'symbol', 'volume', and 'trade_count' columns.")
+
+        # Merge the dataframes on 'symbol'
+        comparison_df = pd.merge(current_df, new_df, on='symbol', how='outer', suffixes=('_current', '_new'), indicator=True)
+
+        # Log symbols that are present only in one of the dataframes
+        missing_symbols_current = comparison_df[comparison_df['_merge'] == 'left_only']['symbol']
+        missing_symbols_new = comparison_df[comparison_df['_merge'] == 'right_only']['symbol']
+
+        logger.info("Symbols missing in new data but present in current data:", list(missing_symbols_current))
+        logger.info("Symbols missing in current data but present in new data:", list(missing_symbols_new))
+
+        # Filter symbols that exist in both dataframes for further comparison
+        common_symbols = comparison_df[comparison_df['_merge'] == 'both']
+
+        # Compare volumes
+        common_symbols['volume_diff'] = common_symbols['volume_new'] - common_symbols['volume_current']
+        common_symbols['volume_change_pct'] = (common_symbols['volume_diff'] / common_symbols['volume_current']).fillna(0)
+
+        # Log significant volume changes
+        significant_volume_changes = common_symbols[common_symbols['volume_change_pct'].abs() > volume_threshold]
+        logger.info("Significant volume changes:")
+        for _, row in significant_volume_changes.iterrows():
+            logger.info(f"Symbol: {row['symbol']}, Current Volume: {row['volume_current']}, New Volume: {row['volume_new']}, Change: {row['volume_change_pct'] * 100:.2f}%")
+
+        # Compare trade_count
+        common_symbols['trade_count_diff'] = common_symbols['trade_count_new'] - common_symbols['trade_count_current']
+        common_symbols['trade_count_change_pct'] = (common_symbols['trade_count_diff'] / common_symbols['trade_count_current']).fillna(0)
+
+        # Log significant trade_count changes
+        significant_trade_count_changes = common_symbols[common_symbols['trade_count_change_pct'].abs() > trade_count_threshold]
+        logger.info("Significant trade count changes:")
+        for _, row in significant_trade_count_changes.iterrows():
+            logger.info(f"Symbol: {row['symbol']}, Current Trade Count: {row['trade_count_current']}, New Trade Count: {row['trade_count_new']}, Change: {row['trade_count_change_pct'] * 100:.2f}%")
+
+    except ValueError as e:
+        # Log the error but continue execution
+        print(f"Comparison not possible: {e}")
+
+
+
 class MyAlpaca:
 
     def __init__(self, key, secret, strategy_name = 'PaperTesting', max_wait_time=30):
@@ -157,16 +202,17 @@ class MyAlpaca:
 
         if strategy_config['Allocated_Capital'] >= 0 and strategy_config['Allocated_Capital'] <= 100:
             self.alloc_capital_perc = strategy_config['Allocated_Capital']/100
-            initiating_strat = ""
+            initiating_strat_string = ""
         else:
             self.alloc_capital_perc = 0 # not active strategy
-            initiating_strat = " (but no capital is allocated to it)"
+            initiating_strat_string = " (but no capital is allocated to it)"
 
         self.SimpleLimitBuy = 0.99 # how limit price should be different from current ask
         self.max_wait_time = max_wait_time # seconds to wait for order execution
 
-        self.universe = strategy_config['Universe']
-        self.stocks_per_run = strategy_config['MaxNumberStocks']
+        self.universe = strategy_config['Universe'] # which stocks/ETFs/etc should be considered as starting point for the strategy
+
+        self.stocks_per_run = strategy_config['MaxNumberStocks'] # used to determine how many tickers we pick-up for trading (e.g. Top 5)
 
         self.max_open_positions = max_positions_allowed # this is the limit for all strategies in total, so could be smth like super class
                                      # I should probably differentiate between ETFs and stocks
@@ -174,12 +220,25 @@ class MyAlpaca:
 
 
         self.strategy_name = strategy_name
+
+        # we need min_investment_per_ticker to avoid too small bets
         self.min_investment_per_ticker = round(self.buypower()*0.005,0)
+
+        # TODO How to define max_investment_per_ticker more efficient?        
         self.max_investment_per_ticker = round(self.buypower()*0.05,0)
-        self.max_holding_time = 40 # max num of days a stock could be in pf 
-                                   #- as I always have a TP at 20% it means for 40 days the TP was not hit and I could be wasting a spot in my pf for another opportunity
-                                   # ... as I also have limit for number of simultaneously opened positioned
-        logger.info(f'Strategy {strategy_name} has been initialized{initiating_strat}')
+
+
+        # max num of days a stock could be in pf
+            # as I always have a TP at 20% it means for MaxHoldingTime days the TP was not hit 
+            # ... and I could be wasting a spot in my pf for another opportunity
+            # ... as I also have limit for number of simultaneously opened positioned
+        # Should probably depend on a strategy, as there are strategies with e.g. quartetly or overnight rotation
+        if strategy_config['MaxHoldingTime'] > 0:
+            self.max_holding_time = strategy_config['MaxHoldingTime']
+        else:
+            self.max_holding_time = 30
+
+        logger.info(f'Strategy {strategy_name} has been initialized{initiating_strat_string}')
 
 
     def quotes(self, symbols):
@@ -204,6 +263,7 @@ class MyAlpaca:
 
 
     def allocate_capital(self, amount: float, tickers: List[str]=None, method: str = "equal", manual_weights: Dict[str, float] = None) -> Dict[str, float]:
+        # splitting amount-to-invest across selected tickers in a certain proportion
 
         if method == "manual" and manual_weights:
             if not all(isinstance(value, (int, float)) for value in manual_weights.values()):
@@ -243,6 +303,8 @@ class MyAlpaca:
 
         else:
             raise ValueError("Invalid method or missing manual weights")
+        
+        # TODO: use ATR to determine position size: Position Size = (Risk Per Trade) / (ATR × Multiple)
 
         return investment_distribution
 
@@ -272,7 +334,6 @@ class MyAlpaca:
 
             latest_multisymbol_quotes = self.quotes(assets_in_scope)
             rows = []
-            # TODO: check the bidask repo: https://github.com/eguidotti/bidask/tree/main/python
             for symbol, info in latest_multisymbol_quotes.items():
                 try:
                     spread = (info.ask_price - info.bid_price) / info.ask_price
@@ -282,7 +343,9 @@ class MyAlpaca:
             df_spreads = pd.DataFrame(rows)
             # without filtering for spread it will be around 2500 symbols
             # spread_limit = 0.01 should deliver 550 symbols; 0.002 - around 50 symbols7
-            return df_spreads[df_spreads.spread < spread_limit].symbol.unique().tolist()
+            ok_stocks = df_spreads[df_spreads.spread < spread_limit].symbol.unique().tolist()
+            logger.info(f'There are {len(ok_stocks)} stocks with spread lower than {spread_limit}')
+            return ok_stocks
         
         except Exception as e:
             logger.error(f"Error in get_ok_alpaca_stocks: {e}")
@@ -293,7 +356,8 @@ class MyAlpaca:
 
         strategy_tickers = {
             'SPY': ['SPY'],
-            'Spiders': ['XLB', 'XLE', 'XLF', 'XLI', 'XLK', 'XLP', 'XLY', 'XLU', 'XLV']
+            'Spiders': ['XLB', 'XLE', 'XLF', 'XLI', 'XLK', 'XLP', 'XLY', 'XLU', 'XLV'],
+            'USAssetClasses': ['XLB', 'XLE'], # adjust
         }
         
         # Check if the strategy name is 'All', if so, call get_all_alpaca_stocks
@@ -308,7 +372,8 @@ class MyAlpaca:
         return tickers_in_scope
 
 
-    def is_positive(self,tickers=['SPY']):
+    def is_positive_today(self,tickers=['SPY']):
+        '''Checking if today's dynamic is positive'''
         tickers_good = []
         snaps = self.stock_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=tickers, feed = DataFeed.SIP))
         for stock in snaps.keys():
@@ -366,7 +431,7 @@ class MyAlpaca:
             return pd.DataFrame()  # return an empty DataFrame or handle it as neede
 
 
-    def get_history(self, symbols: List[str], periods: int, FrameLength: int = 15, frame: str = 'min', num_threads: int = 4, chunk_size: int = 200):
+    def get_history(self, symbols: List[str], periods: int, FrameLength: int = 15, frame: str = 'min', num_threads: int = 8, chunk_size: int = 100, only_for_today = False):
         '''
         data = alpaca_instance.get_history(symbols=scope,periods=570) # 570 = 15min intervals 26 intervals per day = 1 month of data
         data = alpaca_instance.get_history(symbols=scope,periods=500,FrameLength=1,frame='day') # daily data
@@ -410,13 +475,23 @@ class MyAlpaca:
         try:
 
             clock = self.trading_client.get_clock()
-            end_day = clock.timestamp
-            start_day = end_day.date() - relativedelta(days=max(1,(FrameLength*periods)//divider))
+            if only_for_today:
+                end_day = start_day =clock.timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
+                days_ago = 0
+            else:                
+                end_day = clock.timestamp
+
+                # Because of weekends and holidays it could be not straightforward to know where last X periods are ...
+                # ... so I first download more-than-needed points and then filter for X latest periods
+                expanded_daysnum = 3
+                days_ago = max(expanded_daysnum,(FrameLength*periods)//divider)
+                start_day = end_day.date() - relativedelta(days=days_ago)
+
 
             symbols_chunks = chunk_symbols(symbols, chunk_size)
 
             dataframes = []
-            logger.info(f'Starting concurrent download of {frame} data across {len(symbols)} tickers...')
+            logger.info(f'Starting concurrent download of {frame} data across {len(symbols)} tickers for {days_ago} days ...')
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
                 for df in executor.map(fetch_data_for_chunk, symbols_chunks, repeat(start_day), repeat(end_day), repeat(frame)):
@@ -427,6 +502,8 @@ class MyAlpaca:
             if frame != 'day':
                 data_df = data_df[data_df['timestamp'].dt.time.between(pd.to_datetime('09:30:00').time(), pd.to_datetime('16:00:00').time())] # keep only market hours
             
+            # filter for X latest periods as described above
+            data_df = data_df.groupby('symbol', group_keys=False).apply(lambda x: x.nlargest(periods, 'timestamp'))
 
             logger.info(f'Done downloading {frame} data. {len(data_df)} rows collected.')
             return data_df.reset_index(drop=True)
@@ -490,7 +567,11 @@ class MyAlpaca:
 
 
     def update_database(self):
-
+        '''
+        Idea is to have different stock stats pre-calculated (e.g. every couple of days) ...
+        and to use these stats in my 5 min strat heartbeat not to spend time for this as stateless
+        
+        '''
         DB_FILE = os.getenv('gh_csv_stocks_db')
         try:
             # Authenticate to GitHub and get the repo
@@ -498,32 +579,25 @@ class MyAlpaca:
         except GithubException as e:
             raise RuntimeError(f"Failed to connect to GitHub or access the repository: {str(e)}")
 
-        current_db = pd.DataFrame()
-        current_db, sha = _read_csv_from_github(repo, DB_FILE)
+        current_df = pd.DataFrame()
+        current_df, sha = _read_csv_from_github(repo, DB_FILE)
         
-        all_tickers = self.get_ok_alpaca_stocks(spread_limit = 0.02)
-        df_6mohist = self.get_history(symbols=all_tickers, periods=14*22*6, FrameLength=30, frame = 'min')
-        df_6mohist['time_period'] = df_6mohist['timestamp'].dt.strftime('%H:%M:%S')
+        all_tickers = self.get_ok_alpaca_stocks(spread_limit = 0.015)
+        df_6mohist = self.get_history(symbols=all_tickers, periods=14*22*6, FrameLength = 5, frame = 'min')
+        df_6mohist['time_period'] = df_6mohist['timestamp'].dt.time
 
         # calculating average 30min volume and trades and adding to the db
         try:
             logger.info(f'Calculating avg volume and trades for {len(all_tickers)} tickers')
+
             average_df  = df_6mohist.groupby(['symbol', 'time_period']).agg({'volume': 'mean', 'trade_count': 'mean'}).reset_index()
-            pivot_df = average_df.pivot_table(index='symbol', columns='time_period', values=['volume', 'trade_count'])
-            pivot_df.columns = [f'{val}_{col.replace(":", "")}' for val, col in pivot_df.columns]
-            logger.info(pivot_df.head())
-            if current_db.empty:
-                updated_db = pivot_df
-            else:
-                updated_db = pd.merge(current_db, pivot_df, on='symbol', how='left')
-            logger.info(updated_db.head())            
+            average_openning_5min_df = average_df[average_df['time_period'].isin([pd.to_datetime('09:30:00').time()])].reset_index(drop=True)
+            compare_dataframes(current_df, average_openning_5min_df) # show log of comparison
+            logger.info(len(average_openning_5min_df))
         except Exception as e:
             logger.error(f"Error in getting avg volumes: {e}")
             
-        _write_df_to_github(repo, DB_FILE, updated_db, sha)
-
-
-
+        _write_df_to_github(repo, DB_FILE, average_openning_5min_df, sha)
 
 
     def get_history_minute_single(self, symbol, start_time, window = 5, only_market = True):
@@ -597,8 +671,43 @@ class MyAlpaca:
         return result
     
 
-    def get_atr_stoploss(self):
-        raise NotImplementedError("This method hasn't been implemented yet.")
+    def get_atr_stoploss(self, tickers: List[str]=None):
+        '''
+        TR = max( High - Low, High - Previous Close , Low - Previous Close)
+        ATR - typically 14 periods
+        A higher ATR indicates higher volatility, while a lower ATR indicates lower volatility => Using ATR allows you to set stop-loss levels that adapt to changing market conditions
+        [Price] minus [1.5x or 2x ATR]
+        ATR does not account for price gaps that can occur outside trading hours
+        Use ATR stop-losses in conjunction with key support and resistance levels
+        
+        '''
+
+        days = 14
+        prices_df = self.get_history(symbols=tickers, periods=3 * days, FrameLength=1, frame = 'day')
+        
+        if not prices_df.empty:
+            # Calculate TR and ATR per symbol
+            def calculate_tr_and_atr(group, period=14):
+                group['Prior Close'] = group['close'].shift() # Shift 'close' to get the previous close
+                group['TR'] = group[['high', 'Prior Close']].max(axis=1) - group[['low', 'Prior Close']].min(axis=1) # Calculate True Range (TR)
+                group['ATR'] = group['TR'].rolling(window=period, min_periods=1).mean() # ATR as rolling mean of TR    
+                return group
+
+            # Apply the function to each group of symbols
+            prices_df = prices_df.groupby('symbol').apply(calculate_tr_and_atr).reset_index(drop=True)
+            current_atr_df = prices_df.groupby('symbol').last().reset_index() # the rows are sorted from oldest to newest, so we take last row
+            if current_atr_df.empty or 'ATR' not in current_atr_df.columns:
+                raise ValueError("Failed to calculate ATR. Ensure sufficient historical data is available.")
+            
+            atr_dict = current_atr_df.set_index('symbol')['ATR'].to_dict()
+            if not atr_dict:
+                raise ValueError("ATR dictionary is empty. Ensure valid data for the specified symbols.")
+
+            logger.info(f'ATRs for currently owned tickers calculated: {atr_dict}')
+
+            return atr_dict
+        
+        return None
 
 
     def generate_coid(self):
@@ -665,35 +774,104 @@ class MyAlpaca:
             
             logger.info(f'Submiting {orderclass} {side.name} order for {quantity} of {ticker} (strategy: {self.strategy_name})')
             market_order = self.trading_client.submit_order(order_data=market_order_data)
-            status = None
-            msg = ""
+            message = ""
             
             if self.trading_client.get_clock().is_open:
                 start_time = time.time()
                 while True:
                     my_order = self.trading_client.get_order_by_id(market_order.id)
                     if my_order.status == 'filled': # order is executed
+                        message = f'{self.strategy_name}: {my_order.side} - {my_order.symbol} - money: {round(float(my_order.filled_qty)*float(my_order.filled_avg_price),0)} - available buypower: {self.buypower()}'
                         break                    
                     if time.time() - start_time > self.max_wait_time:
-                        msg = f"Despite market is open, the timeout was reached for order on {ticker} (strategy: {self.strategy_name})"
+                        message = f'{self.strategy_name}: {my_order.side} market order for {my_order.symbol} still has status {my_order.status} despite market is open'
                         break
                     time.sleep(1)
-            else:
-                msg = f'Market is closed. Order for {ticker} will be executed on next on-market-open (strategy: {self.strategy_name}).'
 
-            if status == 'filled':
-                message = f'{self.strategy_name}: {my_order.side} - {my_order.symbol} - money: {round(float(my_order.filled_qty)*float(my_order.filled_avg_price),0)} - available buypower: {self.buypower()}'
                 logger.info(f'Market Order Execution: {message}')
                 return "Done"
+
             else:
-                logger.warning(msg)
-                return "Error"
+                message = f'Market is closed. Order for {ticker} will be executed on next on-market-open (strategy: {self.strategy_name}).'
+                logger.info(message)
+                return "Done"
+
         except Exception as e:
             logger.error(f"Error in submit_market_order(): {e}")
             return "Error"
 
 
-    def open_selected_positions(self, buy_dictionary):
+    def submit_stop_order(self, ticker, stopprice, money = 0, quantity = 0, side = OrderSide.BUY):
+        '''
+        After the stoppprice is reached the order become market order.
+        I use this time for range brakeout strategy: e.g. if the high of first 5 minutes is crossed  - buy a stock
+        '''
+        
+        try:
+            start_buying_power = self.buypower()            
+            if quantity == 0: # the order was specified with amount of money to be spent
+                if money <= 0:
+                    logger.warning(f'No money or num of shares specified for {ticker}')
+                    return 'Error'
+                if money > start_buying_power:
+                    logger.warning(f'Not enough buying power for {ticker}')
+                    return 'Error'
+                quantity = int(money//stopprice) # deriving qty
+
+            take_profit_price = round(stopprice*(1+self.SimpleTakeProfit),2)
+            stop_order_data = StopOrderRequest(
+                symbol = ticker, 
+                stop_price = stopprice,
+                qty = quantity, 
+                side = side, 
+                type = OrderType.STOP,
+                time_in_force = TimeInForce.DAY, 
+                client_order_id = self.generate_coid(),
+                take_profit = TakeProfitRequest(limit_price=take_profit_price, side = OrderSide.SELL), 
+                order_class = OrderClass.OTO,
+                position_intent = PositionIntent.BUY_TO_OPEN
+                )
+
+
+            logger.info(f'Submiting limit {side.name} order for {quantity} of {ticker} (strategy: {self.strategy_name})')
+            limit_order = self.trading_client.submit_order(order_data=stop_order_data)
+            msg = ""
+            
+            start_time = time.time()
+            while True:
+                my_order = self.trading_client.get_order_by_id(limit_order.id)
+                if my_order.status == 'new' or my_order.status == 'accepted': # order is sent to venue
+                    msg = f'{self.strategy_name}: {my_order.side} - {my_order.symbol}'
+                    logger.info(f'Stop Limit Order Execution: {msg}')
+                    break                    
+                if time.time() - start_time > self.max_wait_time:
+                    msg = f"Despite market is open, the timeout was reached for limit order on {ticker} (strategy: {self.strategy_name})"
+                    logger.warning(msg)
+                    break
+                time.sleep(1)
+
+            return "Done"
+        except Exception as e:
+            logger.error(f"Error in submit_limit_order(): {e}")
+            return "Error"
+
+
+    def open_selected_positions(self, buy_dictionary, how = 'market', limit_prices_dictionary: Dict[str, float] = None):
+
+        if how not in ['market', 'stop']:
+            logger.warning(f"Invalid order type: {how}. Must be 'market' or 'stop'.")
+            return
+
+        # Check if limit_prices_dictionary is provided and symbols match
+        if limit_prices_dictionary:
+            buy_symbols = set(buy_dictionary.keys())
+            limit_symbols = set(limit_prices_dictionary.keys())
+            if buy_symbols != limit_symbols:
+                logger.warning("Symbols mismatch between buy_dictionary and limit_prices_dictionary.")
+                unmatched_symbols = buy_symbols.symmetric_difference(limit_symbols)
+                logger.warning(f"Unmatched symbols: {unmatched_symbols}")
+                return  # Exiting or handling the mismatch as needed
+            
         start_buying_power = self.buypower()
         positions = self.trading_client.get_all_positions()
 
@@ -702,12 +880,20 @@ class MyAlpaca:
         # TODO: shall we open a position despite a stock being at critical e.g. -4% drawdown? or this should be strategy-specific
 
         for ticker, tobe_invesment in buy_dictionary.items():
+
             if isinstance(tobe_invesment, str):
                 logger.warning(f"Skipping {ticker}: amount is a string ({tobe_invesment})")
                 continue
             if tobe_invesment <= 0:
                 logger.warning(f"Skipping {ticker}: invalid investment volume {tobe_invesment}")
                 continue
+            if how == 'stop' and limit_prices_dictionary:
+                if limit_prices_dictionary[ticker] is None:
+                    logger.warning(f"Skipping {ticker}: limit price is None.")
+                    continue
+                else:
+                    stopprice = round(limit_prices_dictionary[ticker],2)
+
             position = next((p for p in positions if p.symbol == ticker), None)
             if position: # case when we are adding to already opened position
                 current_investment = float(position.market_value) # size of current position
@@ -716,19 +902,24 @@ class MyAlpaca:
                                # ... by doing this it will be easier to calculate strategy profitability and realize trailing stop
                 if investment > 0:
                     logger.info(f'Amount to buy for {ticker} was reduced from {tobe_invesment} to {investment} as there is some investments in this ticker already')
-                    self.submit_market_order(ticker = ticker, money = investment, side = OrderSide.BUY, orderclass = 'oto')
+                    if how == 'market':
+                        self.submit_market_order(ticker = ticker, money = investment, side = OrderSide.BUY, orderclass = 'oto')
+                    elif how == 'stop':
+                        self.submit_stop_order(ticker = ticker, stopprice = stopprice, money = investment, side = OrderSide.BUY)                        
                 else:
                     logger.info(f'Skipping buying {ticker} as the current investment is enough ({current_investment})')
             else: # no existing position in the ticker
-                self.submit_market_order(ticker = ticker, money = tobe_invesment, side = OrderSide.BUY, orderclass = 'oto')
+                if how == 'market':
+                    self.submit_market_order(ticker = ticker, money = tobe_invesment, side = OrderSide.BUY, orderclass = 'oto')
+                elif how == 'stop':
+                    self.submit_stop_order(ticker = ticker, stopprice = stopprice, money = tobe_invesment, side = OrderSide.BUY)                        
 
-        self.sent_alpaca_email(f'{self.strategy_name}: strategy execution',f'Buying for strategy {self.strategy_name} has been done. Buying power decreased by {self.buypower() - start_buying_power}')
+        self.sent_alpaca_email(f'{self.strategy_name}: strategy execution',f'Buying for strategy {self.strategy_name} has been done. Buying power decreased by {int(self.buypower() - start_buying_power)}')
         return "bought"
 
 
     def close_selected_positions(self, sell_dictionary):
         start_buying_power = self.buypower()
-        open_orders = self.trading_client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
         positions = self.trading_client.get_all_positions()
 
         for ticker, qty_to_sell in sell_dictionary.items():
@@ -744,16 +935,17 @@ class MyAlpaca:
                 qty_missing = qty_to_sell - qty_available
                 while qty_missing > 0: # 
                     logger.info(f'Available quantity for {position.symbol} is insufficient: need to adjust open orders')
-                    ticker_orders = [o for o in open_orders if o.symbol == ticker] # open orders for current ticker
-                    for order in ticker_orders:
+                    ticker_open_orders = self.trading_client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols= [ticker])) # open orders for current ticker
+                    for order in ticker_open_orders:
                         order_qty = int(order.qty)
-                        if order_qty >= qty_missing: # current open order qty is big enough to free-up stocks for selling
+                        if order_qty > qty_missing: # current open order qty is big enough to free-up stocks for selling
                             new_qty = order_qty - qty_missing
-                            self.trading_client.replace_order(order.id, qty=new_qty) # Replace the order with reduced quantity
+                            self.trading_client.replace_order_by_id(order.id, qty=new_qty) # Replace the order with reduced quantity
                             time.sleep(1)
                             qty_missing -= qty_missing
                             break
                         else: # current open order qty is NOT enough to free-up stocks for selling
+                            logger.info(f'Cancelling existing limit order for {ticker}, which blocks stopping loss.')
                             self.trading_client.cancel_order_by_id(order_id=order.id) # cancel the order to free up the quantity
                             time.sleep(1)
                             qty_missing -= order_qty
@@ -779,27 +971,34 @@ class MyAlpaca:
         return orders_dicts
 
 
-    def _get_orders_info(self, tickers: List[str]=None):
+    def _get_orders_info(self, tickers: List[str]=None, datefilter = None):
         ''' getting info about filled orders'''
-
         # searching for the datetime of openning the current positions 
-        date_filter = (pd.Timestamp.now()- pd.Timedelta(self.max_holding_time, "days")) # if it a stock in position, it has been bought with max_holding_time
-        request_params = GetOrdersRequest(status=QueryOrderStatus.CLOSED, after = date_filter, side=OrderSide.BUY, symbols = tickers)
+        if datefilter is None:
+            datefilter = self.max_holding_time
+        date_filter = (pd.Timestamp.now()- pd.Timedelta(datefilter, "days")) # if it a stock in position, it has been bought with max_holding_time
+        request_params = GetOrdersRequest(status=QueryOrderStatus.CLOSED, after = date_filter, side=OrderSide.BUY, symbols = tickers, limit = 500)
         orders_dicts = self._orders_to_dictionary(self.trading_client.get_orders(filter=request_params))
 
-        # now we have a problem, that during last 40 days there could be several buy orders for the same tickers (bought => sold => bought),
-        # ... so we need just the most recent buying
-        recent_orders = {}
-        for order in orders_dicts:
-            symbol = order['symbol']
-            filled_at = order['filled_at'].astimezone(dt.timezone(dt.timedelta(hours=-4))) # converting to ET
-            filled_avg_price = round(float(order['filled_avg_price']), 2)
-            filled_qty = int(order['filled_qty'])
-            strategy = order['client_order_id'].split('_')[0] # deriving strategy from order_id
-            if symbol not in recent_orders or filled_at > recent_orders[symbol]['filled_at']:
-                recent_orders[symbol] = {'filled_at': filled_at, 'filled_avg_price': filled_avg_price, 'filled_qty': filled_qty, 'strategy': strategy}
-        buy_orders_dict = {symbol: [details['filled_at'], details['filled_avg_price'], details['filled_qty'], details['strategy']] for symbol, details in recent_orders.items()}
-        return buy_orders_dict
+        if orders_dicts:
+            # now we have a problem, that during last 40 days there could be several buy orders for the same tickers (bought => sold => bought),
+            # ... so we need just the most recent buying
+            recent_orders = {}
+            for order in orders_dicts:
+                if order['filled_at'] is None:
+                    continue  # Skip to the next order
+                symbol = order['symbol']
+                filled_at = order['filled_at'].astimezone(dt.timezone(dt.timedelta(hours=-4))) # converting to ET
+                filled_avg_price = round(float(order['filled_avg_price']), 2)
+                filled_qty = int(order['filled_qty'])
+                strategy = order['client_order_id'].split('_')[0] # deriving strategy from order_id
+                if symbol not in recent_orders or filled_at > recent_orders[symbol]['filled_at']:
+                    recent_orders[symbol] = {'filled_at': filled_at, 'filled_avg_price': filled_avg_price, 'filled_qty': filled_qty, 'strategy': strategy}
+            buy_orders_dict = {symbol: [details['filled_at'], details['filled_avg_price'], details['filled_qty'], details['strategy']] for symbol, details in recent_orders.items()}
+            logger.info(f'Details (buytime, buyprice, qty, strategy) about bought positions ({len(buy_orders_dict)}) were extracted.')
+            return buy_orders_dict
+        else:
+            return {} # empty dictionary
 
 
     def trailing_stop_losses(self):
@@ -809,42 +1008,62 @@ class MyAlpaca:
                 # defining currently owned tickers
                     # as I don't buy additionally if I already have stock in pf, we could search for the datetime when position was opened
                 positions = self.trading_client.get_all_positions()
-                current_positions_symbols = [p.symbol for p in positions]
-                logger.info(f'Currently there are {len(current_positions_symbols)} open positions. Start checking drawdown...')
+                if positions:
+                    current_positions_symbols = [p.symbol for p in positions]
+                    logger.info(f'Currently there are {len(current_positions_symbols)} open positions. Start checking drawdown...')
 
-                buy_orders_dict = self._get_orders_info(current_positions_symbols)
+                    buy_orders_dict = self._get_orders_info(current_positions_symbols) # getting when tickers were bought
 
-                # TODO: we need to compare current_positions_symbols with symbols in buy_orders_dict
+                    # TODO: we need to compare current_positions_symbols with symbols in buy_orders_dict
 
-                positions_dict_loss = {}
-                # for every symbol in positions, check current drawdown and sell if critical
-                # Define a function to calculate drawdown
-                def calculate_drawdown(prices):
-                    max_prices = prices.cummax()
-                    drawdown = (prices - max_prices) / max_prices
-                    return drawdown
+                    if buy_orders_dict:
+                        atr_dict = self.get_atr_stoploss(current_positions_symbols)
 
-                for symbol, details in buy_orders_dict.items():
-                    filled_at = details[0]
-                    data_df = self.get_history_minute_single(symbol, filled_at)
-                    # Apply the drawdown calculation
-                    data_df['drawdown'] = data_df['close'].transform(calculate_drawdown)
-                    current_drawdown = data_df.iloc[-1]['drawdown'] # the rows are sorted from oldest to newest, so we take last row
-                    logger.info(f'Current drawdown for {symbol} is {current_drawdown:.2%}')
+                        positions_dict_loss = {}
+                        # for every symbol in positions, check current drawdown and sell if critical
 
-                    # TODO: we compare with simple stop-loss, but ideally it should be low-pass like in zorro
-                    if current_drawdown < -self.SimpleStopLoss:
-                        positions_dict_loss[symbol] = int(self.trading_client.get_open_position(symbol).qty)
+                        def calculate_drawdown(prices, atr=None):
+                            max_price = prices.cummax().iloc[-1]  # Get the max price till now
+                            current_price = prices.iloc[-1]      # Get the latest price
+                            current_drawdown = (current_price - max_price) / max_price
 
-                if positions_dict_loss:
-                    logger.info(f'Need to sell these loss positions: {positions_dict_loss}')
-                    self.close_selected_positions(positions_dict_loss)
+                            if atr is not None:
+                                target_stop_loss = - 2 * atr / max_price
+                                return current_drawdown, target_stop_loss
+                            else:
+                                return current_drawdown, None
+                            
+                        for symbol, details in buy_orders_dict.items():
+                            filled_at = details[0]
+                            data_df = self.get_history_minute_single(symbol, filled_at)
 
-                # usually all position are opened with TP limit order, but just in case we additionally a mnaual TP check
-                positions_dict_win = {position.symbol: int(position.qty) for position in positions if float(position.unrealized_plpc) > self.SimpleTakeProfit}
-                if positions_dict_win:
-                    logger.info(f'Taking profit on these positions: {positions_dict_win}')
-                    self.close_selected_positions(positions_dict_win)
+                            close_prices = data_df['close']
+
+                            # Get ATR size for the symbol
+                            atr_size = atr_dict.get(symbol, None)
+                            if atr_size is None:
+                                logger.warning(f"ATR size for {symbol} not found. Skipping...")
+                                continue
+
+                            # Calculate drawdown and target stop-loss
+                            current_drawdown, target_stop_loss = calculate_drawdown(close_prices, atr=atr_size)
+                            if current_drawdown < target_stop_loss:
+                                logger.info(f'Current drawdown for {symbol} is {current_drawdown:.2%} (lower than atr stop-loss ({target_stop_loss:.2%})). Selling ...')                                
+                                positions_dict_loss[symbol] = int(self.trading_client.get_open_position(symbol).qty)
+
+                        if positions_dict_loss:
+                            logger.info(f'Need to sell these loss positions: {positions_dict_loss}')
+                            self.close_selected_positions(positions_dict_loss)
+
+                        # # usually all position are opened with TP limit order, but just in case we additionally a mnaual TP check
+                        positions_dict_win = {position.symbol: int(position.qty) for position in positions if float(position.unrealized_plpc) > self.SimpleTakeProfit}
+                        if positions_dict_win:
+                            logger.info(f'Taking profit on these positions: {positions_dict_win}')
+                            self.close_selected_positions(positions_dict_win)
+                    else:
+                        return "No buy orders for positions were found"
+                else:
+                    return "No open positions at the moment"
             except Exception as e:
                 self.sent_alpaca_email('Error in checking drawdown: ',e) # sms + email
                 return "error"
@@ -855,37 +1074,31 @@ class MyAlpaca:
 
     def get_current_positions_df(self):
         positions = self.trading_client.get_all_positions()
-        position_dicts = []
-        for entry in positions:
-            entry_dict = {}  # Create a new dictionary for each entry
-            for attribute, value in vars(entry).items():
-                entry_dict[attribute] = value  # Populate the dictionary
-            position_dicts.append(entry_dict)  # Append the populated dictionary to the list
-        current_positions = pd.DataFrame(position_dicts)
+
+        current_positions_df = pd.DataFrame(self._orders_to_dictionary(positions))
+        cols_needed = ['symbol','market_value','unrealized_plpc']
+        current_positions_df = current_positions_df[cols_needed].copy()
 
         current_positions_symbols = [p.symbol for p in positions]
-        buy_orders_dict = self._get_orders_info(current_positions_symbols)
+        buy_orders_dict = self._get_orders_info(current_positions_symbols,datefilter=120)
         buy_orders_df = pd.DataFrame.from_dict(buy_orders_dict, orient='index', columns=['filled_at', 'filled_avg_price', 'filled_qty', 'strat'])
         buy_orders_df.reset_index(inplace=True)
         buy_orders_df.rename(columns={'index': 'symbol'}, inplace=True)
 
-        cols_needed = ['symbol','market_value','unrealized_plpc']
-        current_positions = current_positions[cols_needed].copy()
-
-        current_positions = current_positions.merge(buy_orders_df, on='symbol', how='left')
-        current_positions['filled_at'] = current_positions['filled_at'].dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
+        current_positions_df = current_positions_df.merge(buy_orders_df, on='symbol', how='left')
+        current_positions_df['filled_at'] = current_positions_df['filled_at'].dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
         current_date = dt.datetime.now()
-        current_positions['days'] = (current_date - current_positions['filled_at']).dt.days
+        current_positions_df['days'] = (current_date - current_positions_df['filled_at']).dt.days
 
         for column in ['market_value','unrealized_plpc']:
-            current_positions[column] = pd.to_numeric(current_positions[column], errors='coerce')
-        current_positions['value'] = round(current_positions['market_value'] / 1000, 1)
-        current_positions['pl%'] = (current_positions['unrealized_plpc'] * 100).astype(int)
-        current_positions = current_positions.sort_values(by='pl%',ascending=False)
+            current_positions_df[column] = pd.to_numeric(current_positions_df[column], errors='coerce')
+        current_positions_df['value'] = round(current_positions_df['market_value'] / 1000, 1)
+        current_positions_df['pl%'] = (current_positions_df['unrealized_plpc'] * 100).astype(int)
+        current_positions_df = current_positions_df.sort_values(by='pl%',ascending=False)
 
-        current_positions.drop(columns=['filled_at','unrealized_plpc','market_value', 'filled_avg_price', 'filled_qty'], inplace=True)
+        current_positions_df.drop(columns=['filled_at','unrealized_plpc','market_value', 'filled_avg_price', 'filled_qty'], inplace=True)
 
-        return current_positions.reset_index(drop=True)
+        return current_positions_df.reset_index(drop=True)
 
 
     def get_day_summary(self, hoursago = 24):   
@@ -894,58 +1107,62 @@ class MyAlpaca:
                 logger.error(f"Number of hours should be positive.")
                 return "Error"
 
-            msg_orders_executed = f"\nNo orders executed for the period."
+            # some initial msgs for email
+            msg_orders_bought = f"\nNo positions were bought for the period."
+            msg_orders_sold = f"\nNo positions were sold for the period."
             msg_orders_open = f"\nNo open orders."
-            html_executed = ""
+            html_bought = ""
+            html_sold = ""
             html_open = ""
 
-            account = self.trading_client.get_account()
             # Check our current balance vs. our balance at the last market close
+            account = self.trading_client.get_account()
             balance_change = round(float(account.equity) - float(account.last_equity),0)
-            date_filter = (pd.Timestamp.now()- pd.Timedelta(hoursago, "hours")).floor(freq='min') # orders for today # orders for today
+
+            # Getting executed orders for the period
+            date_filter = (pd.Timestamp.now()- pd.Timedelta(hoursago, "hours")).floor(freq='min')
             orders = self.trading_client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.CLOSED,after = date_filter))
             if orders:
-                closed_symbols = {order.symbol: float(order.filled_avg_price) for order in orders}
-                closed_symbols_dict = self._get_orders_info(list(closed_symbols.keys()))
-                closed_orders_df = pd.DataFrame.from_dict(closed_symbols_dict, orient='index', columns=['filled_at', 'filled_avg_price', 'filled_qty', 'strat'])
-                closed_orders_df.reset_index(inplace=True)
-                closed_orders_df.rename(columns={'index': 'symbol'}, inplace=True)
-                closed_orders_df['sold_for'] = closed_orders_df.symbol.map(closed_symbols)
-                closed_orders_df['pl%'] = round(100*((closed_orders_df['sold_for'] - closed_orders_df['filled_avg_price']) * closed_orders_df['filled_qty'])/(closed_orders_df['filled_avg_price'] * closed_orders_df['filled_qty']),1)
-                closed_orders_df['filled_at'] = closed_orders_df['filled_at'].dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
-                current_date = dt.datetime.now()
-                closed_orders_df['days'] = (current_date - closed_orders_df['filled_at']).dt.days
-                closed_orders_df.drop(columns=['filled_at','sold_for','filled_avg_price', 'filled_qty'], inplace=True)
-                html_executed = """\
-                    <html>
-                    <head></head>
-                    <body>
-                        {0}
-                    </body>
-                    </html>
-                    """.format(closed_orders_df.to_html(index=False))
+                # digging into sells -------------------------------------------------------------------------------------------------------------
+                sold_symbols = {order.symbol: float(order.filled_avg_price) for order in orders if order.side == "sell"}
+                if sold_symbols:
+                    sold_symbols_dict = self._get_orders_info(list(sold_symbols.keys())) # getting info on when the tickers were bought and by which strategy
+                    sold_symbols_df = pd.DataFrame.from_dict(sold_symbols_dict, orient='index', columns=['filled_at', 'filled_avg_price', 'filled_qty', 'strat'])
+                    sold_symbols_df.reset_index(inplace=True)
+                    sold_symbols_df.rename(columns={'index': 'symbol'}, inplace=True)
+                    sold_symbols_df['sold_for'] = sold_symbols_df.symbol.map(sold_symbols)
+                    sold_symbols_df['pl%'] = round(100*((sold_symbols_df['sold_for'] - sold_symbols_df['filled_avg_price']) * sold_symbols_df['filled_qty'])/(sold_symbols_df['filled_avg_price'] * sold_symbols_df['filled_qty']),1)
+                    sold_symbols_df['filled_at'] = sold_symbols_df['filled_at'].dt.tz_convert('Europe/Berlin').dt.tz_localize(None)
+                    current_date = dt.datetime.now()
+                    sold_symbols_df['days'] = (current_date - sold_symbols_df['filled_at']).dt.days # how long the ticker was in pf
+                    sold_symbols_df.drop(columns=['filled_at','sold_for','filled_avg_price', 'filled_qty'], inplace=True)
+                    # messages for the email
+                    html_sold = """<html><head></head><body>{0}</body></html>""".format(sold_symbols_df.to_html(index=False))
+                    msg_orders_sold = (f"\n{len(sold_symbols)} tickers were sold:\n")
+                    
+                # digging into buys -------------------------------------------------------------------------------------------------------------
+                bought_orders = [o for o in orders if o.side == "buy"]
+                if bought_orders:
+                    bought_orders_df = pd.DataFrame(self._orders_to_dictionary(bought_orders))
+                    bought_orders_df['filled_avg_price'] = round(bought_orders_df['filled_avg_price'].astype(float),2)
+                    bought_orders_df['filled_qty'] = bought_orders_df['filled_qty'].astype(int)
+                    bought_orders_df['invest(k)'] = round((bought_orders_df['filled_qty'] * bought_orders_df['filled_avg_price'])/1000,1)
+                    bought_orders_df['buytime'] = bought_orders_df['filled_at'].dt.tz_convert('Europe/Berlin').dt.tz_localize(None).dt.strftime('%H:%M:%S')
+                    bought_orders_df['strategy'] = bought_orders_df['client_order_id'].str.split('_').str[0]
+                    columns_to_keep = ['strategy', 'symbol','invest(k)','buytime']
+                    bought_orders_df = bought_orders_df[columns_to_keep]
+                    # messages for the email
+                    html_bought = """<html><head></head><body>{0}</body></html>""".format(bought_orders_df.to_html(index=False))
+                    msg_orders_bought = (f"\n{len(bought_orders)} tickers were bought:\n")
 
-                msg_orders_executed = (
-                        f"\n{len(orders)} orders were executed:\n"
-                    )
-
+            # getting open (as of now) orders
             open_orders = self.trading_client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN))
             if open_orders:
-                df_open = pd.DataFrame(self._orders_to_dictionary(open_orders))
-                df_open = df_open[['client_order_id','created_at','symbol','qty','limit_price','order_type','side']].copy()
-                df_open['created_at'] = df_open['created_at'].dt.tz_localize(None)
-
-                html_open = """\
-                    <html>
-                    <head></head>
-                    <body>
-                        {0}
-                    </body>
-                    </html>
-                    """.format(df_open.to_html(index=False))
-
+                open_buy_limit_orders = [o for o in orders if o.side == "buy" and o.order_type == "limit"]
+                open_sell_limit_orders = [o for o in orders if o.side == "sell" and o.order_type == "limit"]
+                open_other_orders = [o for o in orders if o.order_type != "limit"]
                 msg_orders_open = (
-                        f"\nThere are {len(open_orders)} open orders:\n"
+                        f"\nThere are {len(open_buy_limit_orders)} open buy limit orders, {len(open_sell_limit_orders)} open sell limit orders and {len(open_other_orders)} other open orders.\n"
                     )
 
 
@@ -960,14 +1177,14 @@ class MyAlpaca:
                 """.format(df_positions.to_html(index=False))
 
             msg = (
-                    f"Summary for last {hoursago} hours ending today on {pd.Timestamp.today().day_name()}, {pd.Timestamp.today().date().strftime('%d.%b')}:\n\n"
-                    f"\nBalance change: {balance_change}\n\n"
+                    f"\nBalance change: {balance_change}     \n\n"
                     f"\nCurrent positions:\n"
                 )
             
-            html_content = f"{msg}{html_positions}{msg_orders_executed}{html_executed}{msg_orders_open}{html_open}"
+            html_content = f"{msg}{html_positions}{msg_orders_sold}{html_sold}{msg_orders_bought}{html_bought}{msg_orders_open}{html_open}"
+            email_topic = f"Summary for last {hoursago} hours ending today on {pd.Timestamp.today().day_name()}, {pd.Timestamp.today().date().strftime('%d.%b')}"
+            self.sent_alpaca_email(email_topic, html_content)
 
-            self.sent_alpaca_email('Daily summary', html_content)
             return "sent-ok"
         except Exception as e:
             msg = f"Error in sending daily summary: {e}"
@@ -977,7 +1194,8 @@ class MyAlpaca:
 
     def sent_alpaca_email(self, mail_subject, mail_content):
         try:
-            logger.info(mail_content)
+            if self.strategy_name != "trade_report": # don't want log for trade report
+                logger.info(mail_content)
             email_sent = False
             message = MIMEMultipart() # setup the MIME
             message['From'] = 'Alpaca - ' + self.strategy_name
